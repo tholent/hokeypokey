@@ -209,7 +209,7 @@ async def test_search_rate_limited_403_returns_empty(httpx_mock: HTTPXMock):
 @pytest.mark.asyncio
 async def test_check_freshness_304_returns_true(httpx_mock: HTTPXMock):
     source = make_github_source()
-    token = f"octocat{_FRESHNESS_SEP}\"abc123\""
+    token = f'octocat{_FRESHNESS_SEP}"abc123"'
 
     httpx_mock.add_response(
         url="https://api.github.com/users/octocat/gpg_keys",
@@ -225,7 +225,7 @@ async def test_check_freshness_304_returns_true(httpx_mock: HTTPXMock):
 @pytest.mark.asyncio
 async def test_check_freshness_200_returns_false(httpx_mock: HTTPXMock, test_armor):
     source = make_github_source()
-    token = f"octocat{_FRESHNESS_SEP}\"abc123\""
+    token = f'octocat{_FRESHNESS_SEP}"abc123"'
 
     httpx_mock.add_response(
         url="https://api.github.com/users/octocat/gpg_keys",
@@ -314,7 +314,9 @@ async def test_search_too_long_username_rejected(httpx_mock: HTTPXMock):
 
 
 @pytest.mark.asyncio
-async def test_search_single_char_username_valid(httpx_mock: HTTPXMock, test_armor, test_fingerprint):
+async def test_search_single_char_username_valid(
+    httpx_mock: HTTPXMock, test_armor, test_fingerprint
+):
     """A single-character username is valid per GitHub rules."""
     source = make_github_source()
     httpx_mock.add_response(
@@ -331,7 +333,7 @@ async def test_search_single_char_username_valid(httpx_mock: HTTPXMock, test_arm
 async def test_check_freshness_invalid_username_in_token_returns_true():
     """Invalid username in freshness token → assume fresh, no HTTP request."""
     source = make_github_source()
-    token = f"../evil{_FRESHNESS_SEP}\"etag\""
+    token = f'../evil{_FRESHNESS_SEP}"etag"'
     result = await source.check_freshness("AABBCC", token)
     await source.close()
     assert result is True
@@ -345,6 +347,7 @@ async def test_check_freshness_invalid_username_in_token_returns_true():
 def test_missing_token_logs_warning(caplog):
     """GitHubSource warns when token_env is set but the env var is absent."""
     import logging
+
     with caplog.at_level(logging.WARNING, logger="hokeypokey.sources.github"):
         make_github_source(extra_config={"token_env": "NONEXISTENT_GITHUB_TOKEN_XYZ"})
     assert any("NONEXISTENT_GITHUB_TOKEN_XYZ" in r.message for r in caplog.records)
@@ -354,6 +357,7 @@ def test_missing_token_logs_warning(caplog):
 def test_present_token_no_warning(caplog, monkeypatch):
     """GitHubSource does not warn when the token env var is set."""
     import logging
+
     monkeypatch.setenv("TEST_GITHUB_TOKEN_XYZ", "ghp_fake")
     with caplog.at_level(logging.WARNING, logger="hokeypokey.sources.github"):
         make_github_source(extra_config={"token_env": "TEST_GITHUB_TOKEN_XYZ"})

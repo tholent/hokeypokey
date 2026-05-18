@@ -245,32 +245,41 @@ async def test_key_id_lookup_cache_miss_returns_empty():
 async def test_resolver_chaining():
     """LDAP result with github_id triggers GitHub lookup via resolver."""
     ldap_key = make_source_key(
-        FP_ALICE, source_name="ldap", source_priority=10,
-        email="alice@example.com", github_id="octocat",
+        FP_ALICE,
+        source_name="ldap",
+        source_priority=10,
+        email="alice@example.com",
+        github_id="octocat",
     )
     github_key = make_source_key(
-        FP_BOB, source_name="github", source_priority=50,
+        FP_BOB,
+        source_name="github",
+        source_priority=50,
         email="octocat@github.com",
     )
 
     ldap_source = make_mock_source(
-        name="ldap", priority=10,
+        name="ldap",
+        priority=10,
         fields=["email", "github_id"],
         search_result=[ldap_key],
     )
     github_source = make_mock_source(
-        name="github", priority=50,
+        name="github",
+        priority=50,
         fields=["github_username"],
         search_result=[github_key],
     )
 
-    resolver = ConfigResolver(ResolverConfig(
-        name="ldap-to-github",
-        trigger_source="ldap",
-        trigger_field="github_id",
-        target_source="github",
-        target_field="github_username",
-    ))
+    resolver = ConfigResolver(
+        ResolverConfig(
+            name="ldap-to-github",
+            trigger_source="ldap",
+            trigger_field="github_id",
+            target_source="github",
+            target_field="github_username",
+        )
+    )
 
     orch = make_orchestrator(
         sources={"ldap": ldap_source, "github": github_source},
@@ -297,44 +306,57 @@ async def test_resolver_chaining():
 async def test_depth_limit_stops_chaining():
     """Resolver chaining stops at max_depth=1 — second-level resolvers don't fire."""
     ldap_key = make_source_key(
-        FP_ALICE, source_name="ldap", source_priority=10,
-        email="alice@example.com", github_id="octocat",
+        FP_ALICE,
+        source_name="ldap",
+        source_priority=10,
+        email="alice@example.com",
+        github_id="octocat",
     )
     github_key = make_source_key(
-        FP_BOB, source_name="github", source_priority=50,
-        email="octocat@github.com", another_id="deep",
+        FP_BOB,
+        source_name="github",
+        source_priority=50,
+        email="octocat@github.com",
+        another_id="deep",
     )
 
     ldap_source = make_mock_source(
-        name="ldap", priority=10,
+        name="ldap",
+        priority=10,
         fields=["email", "github_id"],
         search_result=[ldap_key],
     )
     github_source = make_mock_source(
-        name="github", priority=50,
+        name="github",
+        priority=50,
         fields=["github_username", "another_id"],
         search_result=[github_key],
     )
     deep_source = make_mock_source(
-        name="deep", priority=90,
+        name="deep",
+        priority=90,
         fields=["deep_field"],
         search_result=[],
     )
 
-    resolver1 = ConfigResolver(ResolverConfig(
-        name="ldap-to-github",
-        trigger_source="ldap",
-        trigger_field="github_id",
-        target_source="github",
-        target_field="github_username",
-    ))
-    resolver2 = ConfigResolver(ResolverConfig(
-        name="github-to-deep",
-        trigger_source="github",
-        trigger_field="another_id",
-        target_source="deep",
-        target_field="deep_field",
-    ))
+    resolver1 = ConfigResolver(
+        ResolverConfig(
+            name="ldap-to-github",
+            trigger_source="ldap",
+            trigger_field="github_id",
+            target_source="github",
+            target_field="github_username",
+        )
+    )
+    resolver2 = ConfigResolver(
+        ResolverConfig(
+            name="github-to-deep",
+            trigger_source="github",
+            trigger_field="another_id",
+            target_source="deep",
+            target_field="deep_field",
+        )
+    )
 
     orch = make_orchestrator(
         sources={"ldap": ldap_source, "github": github_source, "deep": deep_source},
@@ -359,39 +381,51 @@ async def test_depth_limit_stops_chaining():
 async def test_cycle_detection():
     """A→B→A resolver cycle does not loop infinitely."""
     key_a = make_source_key(
-        FP_ALICE, source_name="source-a", source_priority=10,
-        email="alice@example.com", link_to_b="bob",
+        FP_ALICE,
+        source_name="source-a",
+        source_priority=10,
+        email="alice@example.com",
+        link_to_b="bob",
     )
     key_b = make_source_key(
-        FP_BOB, source_name="source-b", source_priority=20,
-        email="bob@example.com", link_to_a="alice@example.com",
+        FP_BOB,
+        source_name="source-b",
+        source_priority=20,
+        email="bob@example.com",
+        link_to_a="alice@example.com",
     )
 
     source_a = make_mock_source(
-        name="source-a", priority=10,
+        name="source-a",
+        priority=10,
         fields=["email", "link_to_b"],
         search_result=[key_a],
     )
     source_b = make_mock_source(
-        name="source-b", priority=20,
+        name="source-b",
+        priority=20,
         fields=["username", "link_to_a"],
         search_result=[key_b],
     )
 
-    resolver_a_to_b = ConfigResolver(ResolverConfig(
-        name="a-to-b",
-        trigger_source="source-a",
-        trigger_field="link_to_b",
-        target_source="source-b",
-        target_field="username",
-    ))
-    resolver_b_to_a = ConfigResolver(ResolverConfig(
-        name="b-to-a",
-        trigger_source="source-b",
-        trigger_field="link_to_a",
-        target_source="source-a",
-        target_field="email",
-    ))
+    resolver_a_to_b = ConfigResolver(
+        ResolverConfig(
+            name="a-to-b",
+            trigger_source="source-a",
+            trigger_field="link_to_b",
+            target_source="source-b",
+            target_field="username",
+        )
+    )
+    resolver_b_to_a = ConfigResolver(
+        ResolverConfig(
+            name="b-to-a",
+            trigger_source="source-b",
+            trigger_field="link_to_a",
+            target_source="source-a",
+            target_field="email",
+        )
+    )
 
     orch = make_orchestrator(
         sources={"source-a": source_a, "source-b": source_b},

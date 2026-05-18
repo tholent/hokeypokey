@@ -8,7 +8,6 @@ from hokeypokey.config import ResolverConfig
 from hokeypokey.models import ResolvedQuery
 from hokeypokey.resolver import ConfigResolver
 
-
 # ---------------------------------------------------------------------------
 # Fixture
 # ---------------------------------------------------------------------------

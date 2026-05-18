@@ -10,33 +10,34 @@ from hokeypokey.config import ResolverConfig
 from hokeypokey.models import SearchResult, SourceKey, SourceMetadata
 from tests.conftest import make_app_with_sources, make_mock_source
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def make_alice_key(armor: str, fingerprint: str, source_name: str = "ldap",
-                   priority: int = 10, **extra_meta) -> SourceKey:
+def make_alice_key(
+    armor: str, fingerprint: str, source_name: str = "ldap", priority: int = 10, **extra_meta
+) -> SourceKey:
     meta = {"email": "alice@example.com"}
     meta.update(extra_meta)
     return SourceKey(
         fingerprint=fingerprint,
         key_armor=armor,
         metadata=meta,
-        freshness_token=f"uid=alice,ou=people,dc=example,dc=com|||20240101000000Z",
+        freshness_token="uid=alice,ou=people,dc=example,dc=com|||20240101000000Z",
         source_name=source_name,
         source_priority=priority,
     )
 
 
-def make_bob_key(armor: str, fingerprint: str, source_name: str = "github",
-                 priority: int = 50) -> SourceKey:
+def make_bob_key(
+    armor: str, fingerprint: str, source_name: str = "github", priority: int = 50
+) -> SourceKey:
     return SourceKey(
         fingerprint=fingerprint,
         key_armor=armor,
         metadata={"email": "bob@github.com", "github_username": "octocat"},
-        freshness_token=f"octocat|||\"etag-abc\"",
+        freshness_token='octocat|||"etag-abc"',
         source_name=source_name,
         source_priority=priority,
     )
@@ -88,9 +89,7 @@ async def test_cold_cache_fingerprint_lookup(alice_armor, alice_fingerprint):
 
     app, _, _ = make_app_with_sources({"ldap": ldap})
     async with app.test_client() as client:
-        resp = await client.get(
-            f"/pks/lookup?op=get&search=0x{alice_fingerprint}&options=mr"
-        )
+        resp = await client.get(f"/pks/lookup?op=get&search=0x{alice_fingerprint}&options=mr")
 
     assert resp.status_code == 200
     ldap.fetch_by_fingerprint.assert_called_once_with(alice_fingerprint)
@@ -126,8 +125,9 @@ async def test_warm_cache_no_source_call_on_second_request(alice_armor, alice_fi
 @pytest.mark.asyncio
 async def test_stale_cache_freshness_passes(alice_armor, alice_fingerprint):
     alice_key = make_alice_key(alice_armor, alice_fingerprint)
-    ldap = make_mock_source("ldap", 10, 300, ["email"],
-                            search_result=[alice_key], freshness_result=True)
+    ldap = make_mock_source(
+        "ldap", 10, 300, ["email"], search_result=[alice_key], freshness_result=True
+    )
 
     app, _, cache = make_app_with_sources({"ldap": ldap})
     async with app.test_client() as client:
@@ -155,12 +155,18 @@ async def test_stale_cache_freshness_passes(alice_armor, alice_fingerprint):
 @pytest.mark.asyncio
 async def test_stale_cache_freshness_fails_refetch(alice_armor, alice_fingerprint):
     alice_key = make_alice_key(alice_armor, alice_fingerprint)
-    updated_key = make_alice_key(alice_armor, alice_fingerprint,
-                                 freshness_token="uid=alice|||20240201000000Z")
-    ldap = make_mock_source("ldap", 10, 300, ["email"],
-                            search_result=[alice_key],
-                            fetch_result=updated_key,
-                            freshness_result=False)
+    updated_key = make_alice_key(
+        alice_armor, alice_fingerprint, freshness_token="uid=alice|||20240201000000Z"
+    )
+    ldap = make_mock_source(
+        "ldap",
+        10,
+        300,
+        ["email"],
+        search_result=[alice_key],
+        fetch_result=updated_key,
+        freshness_result=False,
+    )
 
     app, _, cache = make_app_with_sources({"ldap": ldap})
     async with app.test_client() as client:
@@ -190,10 +196,8 @@ async def test_cross_source_resolver(alice_armor, alice_fingerprint, bob_armor, 
     alice_key = make_alice_key(alice_armor, alice_fingerprint, github_id="octocat")
     bob_key = make_bob_key(bob_armor, bob_fingerprint)
 
-    ldap = make_mock_source("ldap", 10, 300, ["email", "github_id"],
-                            search_result=[alice_key])
-    github = make_mock_source("github", 50, 900, ["github_username"],
-                              search_result=[bob_key])
+    ldap = make_mock_source("ldap", 10, 300, ["email", "github_id"], search_result=[alice_key])
+    github = make_mock_source("github", 50, 900, ["github_username"], search_result=[bob_key])
 
     resolver = ResolverConfig(
         name="ldap-to-github",
@@ -315,11 +319,17 @@ async def test_keyless_ldap_triggers_resolver_to_github(bob_armor, bob_fingerpri
     bob_key = make_bob_key(bob_armor, bob_fingerprint)
 
     ldap = make_mock_source(
-        "ldap", 10, 300, ["email", "username", "github_id"],
+        "ldap",
+        10,
+        300,
+        ["email", "username", "github_id"],
         search_result=ldap_result,
     )
     github = make_mock_source(
-        "github", 50, 900, ["github_username"],
+        "github",
+        50,
+        900,
+        ["github_username"],
         search_result=[bob_key],
         text_searchable=False,
     )
@@ -361,7 +371,10 @@ async def test_text_search_does_not_fan_out_to_github_directly(bob_armor, bob_fi
     ldap = make_mock_source("ldap", 10, 300, ["email", "username"], search_result=[])
     # GitHub should NOT be queried at all
     github = make_mock_source(
-        "github", 50, 900, ["github_username"],
+        "github",
+        50,
+        900,
+        ["github_username"],
         search_result=[],
         text_searchable=False,
     )
@@ -397,11 +410,17 @@ async def test_keyless_ldap_resolver_via_email_search(bob_armor, bob_fingerprint
     bob_key = make_bob_key(bob_armor, bob_fingerprint)
 
     ldap = make_mock_source(
-        "ldap", 10, 300, ["email", "github_id"],
+        "ldap",
+        10,
+        300,
+        ["email", "github_id"],
         search_result=ldap_result,
     )
     github = make_mock_source(
-        "github", 50, 900, ["github_username"],
+        "github",
+        50,
+        900,
+        ["github_username"],
         search_result=[bob_key],
         text_searchable=False,
     )
@@ -419,9 +438,7 @@ async def test_keyless_ldap_resolver_via_email_search(bob_armor, bob_fingerprint
         resolvers=[resolver],
     )
     async with app.test_client() as client:
-        resp = await client.get(
-            "/pks/lookup?op=get&search=wells@example.com&options=mr"
-        )
+        resp = await client.get("/pks/lookup?op=get&search=wells@example.com&options=mr")
 
     assert resp.status_code == 200
     body = await resp.get_data(as_text=True)

@@ -77,14 +77,17 @@ def write_toml(tmp_path: Path, content: str) -> Path:
 
 
 def test_load_minimal_config(tmp_path):
-    p = write_toml(tmp_path, """\
+    p = write_toml(
+        tmp_path,
+        """\
         [server]
         host = "127.0.0.1"
         port = 11371
 
         [cache]
         default_ttl = "10m"
-    """)
+    """,
+    )
     config = load_config(p)
     assert isinstance(config, AppConfig)
     assert config.server.host == "127.0.0.1"
@@ -95,7 +98,9 @@ def test_load_minimal_config(tmp_path):
 
 
 def test_load_config_with_sources(tmp_path):
-    p = write_toml(tmp_path, """\
+    p = write_toml(
+        tmp_path,
+        """\
         [server]
         host = "0.0.0.0"
         port = 11371
@@ -128,7 +133,8 @@ def test_load_config_with_sources(tmp_path):
 
         [sources.config.fields]
         github_username = "login"
-    """)
+    """,
+    )
     config = load_config(p)
     assert len(config.sources) == 2
     assert config.sources[0].name == "corporate-ldap"
@@ -139,7 +145,9 @@ def test_load_config_with_sources(tmp_path):
 
 
 def test_load_config_with_resolver(tmp_path):
-    p = write_toml(tmp_path, """\
+    p = write_toml(
+        tmp_path,
+        """\
         [[sources]]
         name = "ldap"
         type = "ldap"
@@ -163,7 +171,8 @@ def test_load_config_with_resolver(tmp_path):
         trigger_field = "github_id"
         target_source = "github"
         target_field = "github_username"
-    """)
+    """,
+    )
     config = load_config(p)
     assert len(config.resolvers) == 1
     r = config.resolvers[0]
@@ -175,11 +184,14 @@ def test_load_config_with_resolver(tmp_path):
 
 
 def test_load_config_tls(tmp_path):
-    p = write_toml(tmp_path, """\
+    p = write_toml(
+        tmp_path,
+        """\
         [server]
         tls_cert = "/etc/ssl/cert.pem"
         tls_key = "/etc/ssl/key.pem"
-    """)
+    """,
+    )
     config = load_config(p)
     assert config.server.tls_cert == "/etc/ssl/cert.pem"
     assert config.server.tls_key == "/etc/ssl/key.pem"
@@ -196,7 +208,9 @@ def test_load_config_file_not_found(tmp_path):
 
 
 def test_duplicate_source_names(tmp_path):
-    p = write_toml(tmp_path, """\
+    p = write_toml(
+        tmp_path,
+        """\
         [[sources]]
         name = "my-source"
         type = "ldap"
@@ -206,13 +220,16 @@ def test_duplicate_source_names(tmp_path):
         name = "my-source"
         type = "github"
         priority = 20
-    """)
+    """,
+    )
     with pytest.raises(ConfigError, match="Duplicate source name"):
         load_config(p)
 
 
 def test_resolver_unknown_trigger_source(tmp_path):
-    p = write_toml(tmp_path, """\
+    p = write_toml(
+        tmp_path,
+        """\
         [[sources]]
         name = "github"
         type = "github"
@@ -224,13 +241,16 @@ def test_resolver_unknown_trigger_source(tmp_path):
         trigger_field = "github_id"
         target_source = "github"
         target_field = "github_username"
-    """)
+    """,
+    )
     with pytest.raises(ConfigError, match="trigger_source"):
         load_config(p)
 
 
 def test_resolver_unknown_target_source(tmp_path):
-    p = write_toml(tmp_path, """\
+    p = write_toml(
+        tmp_path,
+        """\
         [[sources]]
         name = "ldap"
         type = "ldap"
@@ -242,13 +262,16 @@ def test_resolver_unknown_target_source(tmp_path):
         trigger_field = "github_id"
         target_source = "nonexistent"
         target_field = "github_username"
-    """)
+    """,
+    )
     with pytest.raises(ConfigError, match="target_source"):
         load_config(p)
 
 
 def test_duplicate_field_names_across_sources(tmp_path):
-    p = write_toml(tmp_path, """\
+    p = write_toml(
+        tmp_path,
+        """\
         [[sources]]
         name = "ldap"
         type = "ldap"
@@ -264,27 +287,34 @@ def test_duplicate_field_names_across_sources(tmp_path):
 
         [sources.config.fields]
         email = "email"
-    """)
+    """,
+    )
     with pytest.raises(ConfigError, match="Field name 'email'"):
         load_config(p)
 
 
 def test_source_missing_required_field(tmp_path):
-    p = write_toml(tmp_path, """\
+    p = write_toml(
+        tmp_path,
+        """\
         [[sources]]
         type = "ldap"
         priority = 10
-    """)
+    """,
+    )
     with pytest.raises(ConfigError, match="missing required field 'name'"):
         load_config(p)
 
 
 def test_source_priority_must_be_positive(tmp_path):
-    p = write_toml(tmp_path, """\
+    p = write_toml(
+        tmp_path,
+        """\
         [[sources]]
         name = "ldap"
         type = "ldap"
         priority = 0
-    """)
+    """,
+    )
     with pytest.raises(ConfigError, match="priority must be a positive integer"):
         load_config(p)

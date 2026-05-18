@@ -87,8 +87,7 @@ def make_mock_source(
     source.priority = priority
     source.ttl = ttl
     source.searchable_fields.return_value = [
-        FieldDefinition(name=f, source_attribute=f, text_searchable=text_searchable)
-        for f in fields
+        FieldDefinition(name=f, source_attribute=f, text_searchable=text_searchable) for f in fields
     ]
     _sr = (
         search_result

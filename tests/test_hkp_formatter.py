@@ -14,7 +14,6 @@ from hokeypokey.hkp.formatter import (
 )
 from hokeypokey.models import SourceKey
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -134,7 +133,7 @@ def test_format_index_response_structure(test_armor, test_fingerprint):
     lines = result.strip().split("\n")
     assert lines[0] == "info:1:1"
 
-    pub_line = next((l for l in lines if l.startswith("pub:")), None)
+    pub_line = next((line for line in lines if line.startswith("pub:")), None)
     assert pub_line is not None
 
     parts = pub_line.split(":")
@@ -149,7 +148,7 @@ def test_format_index_response_uid_line(test_armor, test_fingerprint):
     result = format_index_response([key])
 
     lines = result.strip().split("\n")
-    uid_lines = [l for l in lines if l.startswith("uid:")]
+    uid_lines = [line for line in lines if line.startswith("uid:")]
     assert len(uid_lines) >= 1
 
     # UID line must have at least 5 colon-separated fields
@@ -192,7 +191,7 @@ def test_format_index_response_uid_special_chars(test_fingerprint):
     source_key = make_source_key(armor, fp)
 
     result = format_index_response([source_key])
-    uid_lines = [l for l in result.split("\n") if l.startswith("uid:")]
+    uid_lines = [line for line in result.split("\n") if line.startswith("uid:")]
     assert uid_lines, "Expected at least one uid: line"
 
     # The UID field (second colon-delimited field) must not contain a bare ':'

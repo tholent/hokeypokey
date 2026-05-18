@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import ssl
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import patch
 
 import pgpy
 import pgpy.constants
 import pytest
 
-from hokeypokey.sources.ldap import LDAPSource, _FRESHNESS_SEP
-
+from hokeypokey.sources.ldap import _FRESHNESS_SEP, LDAPSource
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -58,10 +57,14 @@ def make_ldap_source(extra_config: dict | None = None) -> LDAPSource:
     return LDAPSource(name="test-ldap", priority=10, ttl=300, config=config)
 
 
-def make_ldap_entry(armor: str, dn: str = "uid=alice,ou=people,dc=example,dc=com",
-                    mail: str = "alice@example.com", uid: str = "alice",
-                    github_id: str = "octocat",
-                    modify_ts: str = "20240101000000Z") -> dict:
+def make_ldap_entry(
+    armor: str,
+    dn: str = "uid=alice,ou=people,dc=example,dc=com",
+    mail: str = "alice@example.com",
+    uid: str = "alice",
+    github_id: str = "octocat",
+    modify_ts: str = "20240101000000Z",
+) -> dict:
     return {
         "_dn": dn,
         "pgpKey": armor,
@@ -107,6 +110,7 @@ async def test_search_constructs_correct_filter(test_armor, test_fingerprint):
 
     # Result is a SearchResult with keys and metadata_only
     from hokeypokey.models import SearchResult
+
     assert isinstance(result, SearchResult)
     assert len(result.keys) == 1
     assert result.keys[0].fingerprint == test_fingerprint
@@ -120,6 +124,7 @@ async def test_search_constructs_correct_filter(test_armor, test_fingerprint):
 @pytest.mark.asyncio
 async def test_search_unknown_field_returns_empty():
     from hokeypokey.models import SearchResult
+
     source = make_ldap_source()
     result = await source.search("alice@example.com", "nonexistent_field")
     assert isinstance(result, SearchResult)
@@ -130,6 +135,7 @@ async def test_search_unknown_field_returns_empty():
 @pytest.mark.asyncio
 async def test_search_ldap_error_returns_empty():
     from hokeypokey.models import SearchResult
+
     source = make_ldap_source()
     with patch.object(source, "_ldap_search", side_effect=Exception("connection refused")):
         result = await source.search("alice@example.com", "email")
@@ -281,6 +287,7 @@ async def test_fetch_by_fingerprint_with_config(test_armor, test_fingerprint):
 async def test_search_keyless_entry_produces_metadata():
     """An LDAP entry with no pgpKey but with metadata should produce a SourceMetadata."""
     from hokeypokey.models import SearchResult
+
     source = make_ldap_source()
 
     # Entry has no pgpKey but has all the other fields
@@ -310,6 +317,7 @@ async def test_search_keyless_entry_produces_metadata():
 async def test_search_mixed_entries(test_armor, test_fingerprint):
     """Search returns both a keyed entry and a keyless entry."""
     from hokeypokey.models import SearchResult
+
     source = make_ldap_source()
 
     keyed_entry = make_ldap_entry(test_armor, dn="uid=alice,ou=people,dc=example,dc=com")
@@ -383,6 +391,7 @@ async def test_close_is_noop():
 def test_ldaps_uri_uses_cert_required_by_default():
     """ldaps:// URI with default config must use CERT_REQUIRED."""
     from ldap3 import Tls
+
     source = make_ldap_source({"uri": "ldaps://ldap.corp.example.com"})
     assert source._server.tls is not None
     assert isinstance(source._server.tls, Tls)
@@ -404,10 +413,12 @@ def test_ldaps_uri_tls_ca_file_passed_through(tmp_path):
     """
     ca_file = tmp_path / "ca.crt"
     ca_file.write_bytes(b"")  # ldap3 checks existence, not content at init time
-    source = make_ldap_source({
-        "uri": "ldaps://ldap.corp.example.com",
-        "tls_ca_file": str(ca_file),
-    })
+    source = make_ldap_source(
+        {
+            "uri": "ldaps://ldap.corp.example.com",
+            "tls_ca_file": str(ca_file),
+        }
+    )
     assert source._server.tls is not None
     assert source._server.tls.ca_certs_file == str(ca_file)
 

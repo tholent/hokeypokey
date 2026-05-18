@@ -24,6 +24,7 @@ def minimal_config() -> AppConfig:
 
 def test_create_app_returns_quart_app():
     from quart import Quart
+
     app = create_app(minimal_config())
     assert isinstance(app, Quart)
 

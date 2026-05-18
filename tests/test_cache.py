@@ -4,11 +4,8 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 from hokeypokey.cache import KeyCache
 from hokeypokey.models import SourceKey
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -328,7 +325,7 @@ def test_lru_eviction_removes_oldest():
     # Adding a 4th entry must evict FP (the oldest)
     cache.put(make_key(FP4, email="d@example.com"), ttl=300)
     assert len(cache) == 3
-    assert cache.get_by_fingerprint(FP) is None   # evicted
+    assert cache.get_by_fingerprint(FP) is None  # evicted
     assert cache.get_by_fingerprint(FP2) is not None
     assert cache.get_by_fingerprint(FP3) is not None
     assert cache.get_by_fingerprint(FP4) is not None
@@ -347,8 +344,8 @@ def test_lru_access_refreshes_order():
     # Adding FP4 must evict FP2 (now the LRU), not FP
     cache.put(make_key(FP4, email="d@example.com"), ttl=300)
     assert len(cache) == 3
-    assert cache.get_by_fingerprint(FP) is not None   # protected by access
-    assert cache.get_by_fingerprint(FP2) is None      # evicted
+    assert cache.get_by_fingerprint(FP) is not None  # protected by access
+    assert cache.get_by_fingerprint(FP2) is None  # evicted
     assert cache.get_by_fingerprint(FP3) is not None
     assert cache.get_by_fingerprint(FP4) is not None
 
@@ -394,5 +391,5 @@ def test_lru_search_refreshes_order():
 
     # Adding FP4 must evict FP2 (now the LRU), not FP
     cache.put(make_key(FP4, email="d@example.com"), ttl=300)
-    assert cache.get_by_fingerprint(FP) is not None   # protected
-    assert cache.get_by_fingerprint(FP2) is None      # evicted
+    assert cache.get_by_fingerprint(FP) is not None  # protected
+    assert cache.get_by_fingerprint(FP2) is None  # evicted
