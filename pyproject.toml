@@ -37,6 +37,9 @@ packages = ["src/hokeypokey"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:ldap3",
+]
 
 [tool.coverage.run]
 source = ["hokeypokey"]
