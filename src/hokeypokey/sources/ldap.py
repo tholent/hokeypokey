@@ -97,19 +97,39 @@ class LDAPSource(KeySource):
         # WITHOUT a PGP key are still found — their metadata can trigger resolvers.
         search_filter = f"({ldap_attr}={escaped_query})"
 
-        attrs_to_fetch = (
-            [self._key_attribute]
-            + list(self._fields.values())
-            + ["modifyTimestamp"]
-        )
+        # Build the attribute list: mapped fields + modifyTimestamp are always
+        # requested.  The key_attribute is requested separately so we can retry
+        # without it if the LDAP server doesn't recognise it (e.g. the attribute
+        # type isn't in the schema yet).
+        metadata_attrs = list(self._fields.values()) + ["modifyTimestamp"]
+        attrs_with_key = [self._key_attribute] + metadata_attrs
 
         try:
             entries = await asyncio.to_thread(
-                self._ldap_search, self._base_dn, SUBTREE, search_filter, attrs_to_fetch
+                self._ldap_search, self._base_dn, SUBTREE, search_filter, attrs_with_key
             )
         except Exception as exc:
-            logger.warning("LDAP search failed for source %r: %s", self.name, exc)
-            return SearchResult()
+            # If the search fails (e.g. "invalid attribute type" for the key
+            # attribute), retry requesting only the metadata attributes.
+            # This lets keyless LDAP entries still trigger resolvers even when
+            # the PGP key attribute doesn't exist in the schema.
+            exc_msg = str(exc).lower()
+            if "invalid attribute" in exc_msg or "undefined attribute" in exc_msg:
+                logger.info(
+                    "LDAP source %r: key attribute %r not in schema, "
+                    "retrying without it (metadata-only)",
+                    self.name, self._key_attribute,
+                )
+                try:
+                    entries = await asyncio.to_thread(
+                        self._ldap_search, self._base_dn, SUBTREE, search_filter, metadata_attrs
+                    )
+                except Exception as exc2:
+                    logger.warning("LDAP search retry failed for source %r: %s", self.name, exc2)
+                    return SearchResult()
+            else:
+                logger.warning("LDAP search failed for source %r: %s", self.name, exc)
+                return SearchResult()
 
         return self._entries_to_search_result(entries)
 
