@@ -10,6 +10,16 @@ from hokeypokey.sources.base import KeySource
 
 __all__ = ["KeySource", "get_source_class"]
 
+# Built once on first call; None until then. Lazy imports inside _build_registry
+# prevent circular imports (sources → models/config → sources).
+_REGISTRY: dict[str, type[KeySource]] | None = None
+
+
+def _build_registry() -> dict[str, type[KeySource]]:
+    from hokeypokey.sources.github import GitHubSource
+    from hokeypokey.sources.ldap import LDAPSource
+    return {"ldap": LDAPSource, "github": GitHubSource}
+
 
 def get_source_class(type_name: str) -> type[KeySource]:
     """Return the :class:`KeySource` subclass registered for *type_name*.
@@ -27,17 +37,11 @@ def get_source_class(type_name: str) -> type[KeySource]:
     Raises:
         :class:`~hokeypokey.config.ConfigError`: if *type_name* is not registered.
     """
-    # Import lazily to avoid circular imports and to keep startup fast when
-    # only a subset of source types are actually used.
+    global _REGISTRY
+    if _REGISTRY is None:
+        _REGISTRY = _build_registry()
+
     from hokeypokey.config import ConfigError
-    from hokeypokey.sources.github import GitHubSource
-    from hokeypokey.sources.ldap import LDAPSource
-
-    _REGISTRY: dict[str, type[KeySource]] = {
-        "ldap": LDAPSource,
-        "github": GitHubSource,
-    }
-
     try:
         return _REGISTRY[type_name]
     except KeyError:
