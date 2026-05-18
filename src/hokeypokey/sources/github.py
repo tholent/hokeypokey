@@ -297,39 +297,17 @@ class GitHubSource(KeySource):
     ) -> list[SourceKey]:
         """Parse GitHub GPG key API response objects into SourceKey instances."""
         keys: list[SourceKey] = []
-
         for key_data in gpg_keys_data:
             raw_key = key_data.get("raw_key", "")
             if not raw_key:
                 continue
-
-            # Parse the key to get the fingerprint
             try:
                 pgp_key, _ = pgpy.PGPKey.from_blob(raw_key)
                 fingerprint = str(pgp_key.fingerprint).replace(" ", "").upper()
             except Exception as exc:
                 logger.warning("Failed to parse PGP key for GitHub user %r: %s", username, exc)
                 continue
-
-            # Build metadata
-            metadata: dict[str, str] = {}
-
-            # Map GitHub fields to logical field names
-            login_logical = self._reverse_fields.get("login")
-            if login_logical:
-                metadata[login_logical] = username
-
-            # Collect email addresses from the key's emails list
-            email_logical = self._reverse_fields.get("email")
-            gh_emails: list[dict[str, Any]] = key_data.get("emails", [])
-            if gh_emails and email_logical:
-                # Use the first verified email if available
-                verified = [e["email"] for e in gh_emails if e.get("verified")]
-                all_emails = [e["email"] for e in gh_emails]
-                primary = verified[0] if verified else (all_emails[0] if all_emails else "")
-                if primary:
-                    metadata[email_logical] = primary
-
+            metadata = self._build_key_metadata(username, key_data.get("emails", []))
             keys.append(
                 SourceKey(
                     fingerprint=fingerprint,
@@ -340,5 +318,26 @@ class GitHubSource(KeySource):
                     source_priority=self.priority,
                 )
             )
-
         return keys
+
+    def _build_key_metadata(self, username: str, gh_emails: list[dict[str, Any]]) -> dict[str, str]:
+        """Build the metadata dict for a single GitHub GPG key."""
+        metadata: dict[str, str] = {}
+        login_logical = self._reverse_fields.get("login")
+        if login_logical:
+            metadata[login_logical] = username
+        email_logical = self._reverse_fields.get("email")
+        if email_logical and gh_emails:
+            primary = self._extract_primary_email(gh_emails)
+            if primary:
+                metadata[email_logical] = primary
+        return metadata
+
+    @staticmethod
+    def _extract_primary_email(gh_emails: list[dict[str, Any]]) -> str:
+        """Return the best email from a GitHub emails list (verified takes precedence)."""
+        verified = [e["email"] for e in gh_emails if e.get("verified")]
+        if verified:
+            return verified[0]
+        all_emails = [e["email"] for e in gh_emails]
+        return all_emails[0] if all_emails else ""

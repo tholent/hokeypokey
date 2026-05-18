@@ -62,6 +62,36 @@ class _KeyInfo:
     uids: list[_UIDInfo] = field(default_factory=list)
 
 
+def _parse_uid_info(uid: object, key_created_ts: int) -> _UIDInfo:
+    """Extract HKP UID metadata from a pgpy PGPUID object."""
+    uid_str = getattr(uid, "userid", None) or str(uid)
+    uid_created_ts = 0
+    uid_expires_ts: int | None = None
+    uid_flags = ""
+
+    try:
+        selfsig = uid.selfsig  # type: ignore[union-attr]
+        if selfsig is not None:
+            if selfsig.creation:
+                uid_created_ts = int(selfsig.creation.timestamp())
+            if selfsig.key_expiration is not None:
+                # key_expiration is a timedelta from key creation
+                uid_expires_ts = key_created_ts + int(selfsig.key_expiration.total_seconds())
+    except Exception:
+        pass
+
+    # pgpy 0.6.x may not expose is_revoked
+    try:
+        if getattr(uid, "is_revoked", False):
+            uid_flags += "r"
+    except Exception:
+        pass
+
+    return _UIDInfo(
+        uid_string=uid_str, created=uid_created_ts, expires=uid_expires_ts, flags=uid_flags
+    )
+
+
 def parse_key_metadata(armor: str) -> _KeyInfo | None:
     """Parse an ASCII-armored public key and extract HKP index metadata.
 
@@ -109,42 +139,7 @@ def parse_key_metadata(armor: str) -> _KeyInfo | None:
     if getattr(key, "is_revoked", False):
         flags += "r"
 
-    # UIDs
-    uid_infos: list[_UIDInfo] = []
-    for uid in key.userids:
-        # pgpy PGPUID: use .userid for the full "Name <email>" string
-        uid_str = getattr(uid, "userid", None) or str(uid)
-        uid_created_ts = 0
-        uid_expires_ts: int | None = None
-        uid_flags = ""
-
-        # Try to get self-signature details
-        try:
-            selfsig = uid.selfsig
-            if selfsig is not None:
-                if selfsig.creation:
-                    uid_created_ts = int(selfsig.creation.timestamp())
-                if selfsig.key_expiration is not None:
-                    # key_expiration is a timedelta from key creation
-                    uid_expires_ts = created_ts + int(selfsig.key_expiration.total_seconds())
-        except Exception:
-            pass
-
-        # Check if UID is revoked (pgpy 0.6.x may not expose is_revoked)
-        try:
-            if getattr(uid, "is_revoked", False):
-                uid_flags += "r"
-        except Exception:
-            pass
-
-        uid_infos.append(
-            _UIDInfo(
-                uid_string=uid_str,
-                created=uid_created_ts,
-                expires=uid_expires_ts,
-                flags=uid_flags,
-            )
-        )
+    uid_infos = [_parse_uid_info(uid, created_ts) for uid in key.userids]
 
     return _KeyInfo(
         fingerprint=fp,

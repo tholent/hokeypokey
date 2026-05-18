@@ -276,75 +276,73 @@ class LDAPSource(KeySource):
         :class:`SourceMetadata` objects — these can still trigger resolvers.
         """
         result = SearchResult()
-
         for entry in entries:
             metadata = self._extract_metadata(entry)
-
-            raw_key = entry.get(self._key_attribute)
-
-            # Handle list values (multi-valued attributes)
-            if isinstance(raw_key, list):
-                raw_key = raw_key[0] if raw_key else None
-
-            # Ensure it's a string if present
-            if isinstance(raw_key, bytes):
-                try:
-                    raw_key = raw_key.decode("utf-8")
-                except Exception:
-                    raw_key = None
-
-            if raw_key:
-                # Entry has a PGP key — try to parse it
-                try:
-                    pgp_key, _ = pgpy.PGPKey.from_blob(raw_key)
-                    fingerprint = str(pgp_key.fingerprint).replace(" ", "").upper()
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to parse PGP key from LDAP entry %r: %s",
-                        entry.get("_dn"),
-                        exc,
-                    )
-                    # Key is unparseable — treat as metadata-only
-                    if metadata:
-                        result.metadata_only.append(
-                            SourceMetadata(
-                                metadata=metadata,
-                                source_name=self.name,
-                                source_priority=self.priority,
-                            )
-                        )
-                    continue
-
-                # Build freshness token
-                dn = entry.get("_dn", "")
-                modify_ts = entry.get("modifyTimestamp") or ""
-                if isinstance(modify_ts, list):
-                    modify_ts = modify_ts[0] if modify_ts else ""
-                freshness_token = f"{dn}{_FRESHNESS_SEP}{modify_ts}"
-
-                result.keys.append(
-                    SourceKey(
-                        fingerprint=fingerprint,
-                        key_armor=raw_key,
-                        metadata=metadata,
-                        freshness_token=freshness_token,
-                        source_name=self.name,
-                        source_priority=self.priority,
-                    )
-                )
-            elif metadata:
-                # No PGP key, but has metadata — can still trigger resolvers
-                logger.debug(
-                    "LDAP entry %r has no PGP key but has metadata: %s",
-                    entry.get("_dn"),
-                    list(metadata.keys()),
-                )
-                result.metadata_only.append(
-                    SourceMetadata(
-                        metadata=metadata,
-                        source_name=self.name,
-                        source_priority=self.priority,
-                    )
-                )
-
+            raw_key = self._decode_raw_key(entry.get(self._key_attribute))
+            self._process_ldap_entry(entry, raw_key, metadata, result)
         return result
+
+    @staticmethod
+    def _decode_raw_key(raw: object) -> str | None:
+        """Normalise an LDAP attribute value to a string PGP key, or None."""
+        if isinstance(raw, list):
+            raw = raw[0] if raw else None
+        if isinstance(raw, bytes):
+            try:
+                return raw.decode("utf-8")
+            except Exception:
+                return None
+        return raw if isinstance(raw, str) else None
+
+    def _process_ldap_entry(
+        self,
+        entry: dict[str, Any],
+        raw_key: str | None,
+        metadata: dict[str, str],
+        result: SearchResult,
+    ) -> None:
+        """Classify a single LDAP entry into a SourceKey or SourceMetadata."""
+        if raw_key:
+            try:
+                pgp_key, _ = pgpy.PGPKey.from_blob(raw_key)
+                fingerprint = str(pgp_key.fingerprint).replace(" ", "").upper()
+            except Exception as exc:
+                logger.warning(
+                    "Failed to parse PGP key from LDAP entry %r: %s", entry.get("_dn"), exc
+                )
+                if metadata:
+                    result.metadata_only.append(
+                        SourceMetadata(
+                            metadata=metadata,
+                            source_name=self.name,
+                            source_priority=self.priority,
+                        )
+                    )
+                return
+            modify_ts = entry.get("modifyTimestamp") or ""
+            if isinstance(modify_ts, list):
+                modify_ts = modify_ts[0] if modify_ts else ""
+            freshness_token = f"{entry.get('_dn', '')}{_FRESHNESS_SEP}{modify_ts}"
+            result.keys.append(
+                SourceKey(
+                    fingerprint=fingerprint,
+                    key_armor=raw_key,
+                    metadata=metadata,
+                    freshness_token=freshness_token,
+                    source_name=self.name,
+                    source_priority=self.priority,
+                )
+            )
+        elif metadata:
+            logger.debug(
+                "LDAP entry %r has no PGP key but has metadata: %s",
+                entry.get("_dn"),
+                list(metadata.keys()),
+            )
+            result.metadata_only.append(
+                SourceMetadata(
+                    metadata=metadata,
+                    source_name=self.name,
+                    source_priority=self.priority,
+                )
+            )
