@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pgpy
 import pgpy.constants
 import pytest
 
-from hokeypokey.app import create_app
-from hokeypokey.config import AppConfig, CacheConfig, ResolverConfig, ServerConfig, SourceConfig
-from hokeypokey.models import FieldDefinition, SearchResult, SourceKey, SourceMetadata
+from hokeypokey.config import ResolverConfig
+from hokeypokey.models import FieldDefinition, SearchResult, SourceKey
 from hokeypokey.sources.base import KeySource
-
 
 # ---------------------------------------------------------------------------
 # PGP key fixtures
@@ -93,7 +90,12 @@ def make_mock_source(
         FieldDefinition(name=f, source_attribute=f, text_searchable=text_searchable)
         for f in fields
     ]
-    source.search = AsyncMock(return_value=search_result if search_result is not None else [])
+    _sr = (
+        search_result
+        if isinstance(search_result, SearchResult)
+        else SearchResult(keys=search_result or [])
+    )
+    source.search = AsyncMock(return_value=_sr)
     source.fetch_by_fingerprint = AsyncMock(return_value=fetch_result)
     source.check_freshness = AsyncMock(return_value=freshness_result)
     source.close = AsyncMock()
@@ -107,11 +109,12 @@ def make_mock_source(
 
 def make_app_with_sources(sources_dict: dict, resolvers: list[ResolverConfig] | None = None):
     """Create a Quart app with pre-built source objects injected directly."""
+    from quart import Quart
+
     from hokeypokey.cache import KeyCache
+    from hokeypokey.hkp.routes import hkp_bp
     from hokeypokey.orchestrator import SearchOrchestrator
     from hokeypokey.resolver import ConfigResolver
-    from quart import Quart
-    from hokeypokey.hkp.routes import hkp_bp
 
     app = Quart(__name__)
     cache = KeyCache()

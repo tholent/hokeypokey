@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from hokeypokey.models import FieldDefinition, SourceKey
+    from hokeypokey.models import FieldDefinition, SearchResult, SourceKey
 
 
 class KeySource(ABC):
@@ -58,7 +58,7 @@ class KeySource(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    async def search(self, query: str, field: str = "email") -> list[SourceKey]:
+    async def search(self, query: str, field: str = "email") -> SearchResult:
         """Search for keys matching *query* against the named *field*.
 
         Args:

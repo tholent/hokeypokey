@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 import pgpy
 
-from hokeypokey.models import FieldDefinition, SourceKey
+from hokeypokey.models import FieldDefinition, SearchResult, SourceKey
 from hokeypokey.sources.base import KeySource
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,12 @@ class GitHubSource(KeySource):
         token_env = config.get("token_env")
         if token_env:
             token = os.environ.get(token_env)
+            if not token:
+                logger.warning(
+                    "GitHub source %r: environment variable %r is not set. "
+                    "Unauthenticated requests are limited to 60/hour.",
+                    name, token_env,
+                )
 
         headers = {
             "Accept": "application/vnd.github+json",
@@ -98,7 +104,7 @@ class GitHubSource(KeySource):
             for logical, gh_field in self._fields.items()
         ]
 
-    async def search(self, query: str, field: str = "github_username") -> list[SourceKey]:
+    async def search(self, query: str, field: str = "github_username") -> SearchResult:
         """Search GitHub for GPG keys.
 
         Routes the search based on which GitHub field the logical *field* maps to.
@@ -106,19 +112,19 @@ class GitHubSource(KeySource):
         gh_field = self._fields.get(field)
         if gh_field is None:
             logger.debug("GitHub source %r has no mapping for field %r", self.name, field)
-            return []
+            return SearchResult()
 
         if gh_field == "login":
-            return await self._fetch_keys_for_username(query)
+            return SearchResult(keys=await self._fetch_keys_for_username(query))
 
         if gh_field == "email":
-            return await self._search_by_email(query)
+            return SearchResult(keys=await self._search_by_email(query))
 
         logger.debug(
             "GitHub source %r: unsupported field mapping %r → %r",
             self.name, field, gh_field,
         )
-        return []
+        return SearchResult()
 
     async def fetch_by_fingerprint(self, fingerprint: str) -> SourceKey | None:
         """Not supported — GitHub has no fingerprint-based key lookup API."""

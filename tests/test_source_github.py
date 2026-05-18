@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import json
-
 import pgpy
 import pgpy.constants
 import pytest
 from pytest_httpx import HTTPXMock
 
-from hokeypokey.sources.github import GitHubSource, _FRESHNESS_SEP
-
+from hokeypokey.models import SearchResult
+from hokeypokey.sources.github import _FRESHNESS_SEP, GitHubSource
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -90,17 +88,18 @@ async def test_search_by_username(httpx_mock: HTTPXMock, test_armor, test_finger
         headers={"ETag": '"abc123"'},
     )
 
-    results = await source.search("octocat", "github_username")
+    result = await source.search("octocat", "github_username")
     await source.close()
 
-    assert len(results) == 1
-    assert results[0].fingerprint == test_fingerprint
-    assert results[0].metadata.get("github_username") == "octocat"
-    assert results[0].source_name == "test-github"
-    assert results[0].source_priority == 50
+    assert isinstance(result, SearchResult)
+    assert len(result.keys) == 1
+    assert result.keys[0].fingerprint == test_fingerprint
+    assert result.keys[0].metadata.get("github_username") == "octocat"
+    assert result.keys[0].source_name == "test-github"
+    assert result.keys[0].source_priority == 50
 
     # Freshness token should encode username and ETag
-    token = results[0].freshness_token
+    token = result.keys[0].freshness_token
     assert _FRESHNESS_SEP in token
     username_part, etag_part = token.split(_FRESHNESS_SEP, 1)
     assert username_part == "octocat"
@@ -116,10 +115,10 @@ async def test_search_by_username_not_found(httpx_mock: HTTPXMock):
         status_code=404,
     )
 
-    results = await source.search("nobody", "github_username")
+    result = await source.search("nobody", "github_username")
     await source.close()
 
-    assert results == []
+    assert result.keys == []
 
 
 # ---------------------------------------------------------------------------
@@ -143,11 +142,11 @@ async def test_search_by_email(httpx_mock: HTTPXMock, test_armor, test_fingerpri
         headers={"ETag": '"xyz789"'},
     )
 
-    results = await source.search("alice@example.com", "email")
+    result = await source.search("alice@example.com", "email")
     await source.close()
 
-    assert len(results) == 1
-    assert results[0].fingerprint == test_fingerprint
+    assert len(result.keys) == 1
+    assert result.keys[0].fingerprint == test_fingerprint
 
 
 @pytest.mark.asyncio
@@ -159,10 +158,10 @@ async def test_search_by_email_no_users_found(httpx_mock: HTTPXMock):
         json={"items": [], "total_count": 0},
     )
 
-    results = await source.search("nobody@example.com", "email")
+    result = await source.search("nobody@example.com", "email")
     await source.close()
 
-    assert results == []
+    assert result.keys == []
 
 
 # ---------------------------------------------------------------------------
@@ -180,10 +179,10 @@ async def test_search_rate_limited_429_returns_empty(httpx_mock: HTTPXMock):
         headers={"Retry-After": "60"},
     )
 
-    results = await source.search("octocat", "github_username")
+    result = await source.search("octocat", "github_username")
     await source.close()
 
-    assert results == []
+    assert result.keys == []
 
 
 @pytest.mark.asyncio
@@ -196,10 +195,10 @@ async def test_search_rate_limited_403_returns_empty(httpx_mock: HTTPXMock):
         headers={"X-RateLimit-Remaining": "0"},
     )
 
-    results = await source.search("octocat", "github_username")
+    result = await source.search("octocat", "github_username")
     await source.close()
 
-    assert results == []
+    assert result.keys == []
 
 
 # ---------------------------------------------------------------------------
@@ -270,9 +269,9 @@ async def test_fetch_by_fingerprint_returns_none():
 @pytest.mark.asyncio
 async def test_search_unknown_field_returns_empty():
     source = make_github_source()
-    results = await source.search("value", "nonexistent_field")
+    result = await source.search("value", "nonexistent_field")
     await source.close()
-    assert results == []
+    assert result.keys == []
 
 
 # ---------------------------------------------------------------------------
@@ -284,34 +283,34 @@ async def test_search_unknown_field_returns_empty():
 async def test_search_invalid_username_returns_empty_no_request(httpx_mock: HTTPXMock):
     """An invalid username must be rejected before any HTTP request is made."""
     source = make_github_source()
-    results = await source.search("../evil", "github_username")
+    result = await source.search("../evil", "github_username")
     await source.close()
-    assert results == []
+    assert result.keys == []
     # httpx_mock would raise if any request was made
 
 
 @pytest.mark.asyncio
 async def test_search_leading_hyphen_rejected(httpx_mock: HTTPXMock):
     source = make_github_source()
-    results = await source.search("-badname", "github_username")
+    result = await source.search("-badname", "github_username")
     await source.close()
-    assert results == []
+    assert result.keys == []
 
 
 @pytest.mark.asyncio
 async def test_search_trailing_hyphen_rejected(httpx_mock: HTTPXMock):
     source = make_github_source()
-    results = await source.search("badname-", "github_username")
+    result = await source.search("badname-", "github_username")
     await source.close()
-    assert results == []
+    assert result.keys == []
 
 
 @pytest.mark.asyncio
 async def test_search_too_long_username_rejected(httpx_mock: HTTPXMock):
     source = make_github_source()
-    results = await source.search("a" * 40, "github_username")
+    result = await source.search("a" * 40, "github_username")
     await source.close()
-    assert results == []
+    assert result.keys == []
 
 
 @pytest.mark.asyncio
@@ -323,9 +322,9 @@ async def test_search_single_char_username_valid(httpx_mock: HTTPXMock, test_arm
         json=[make_gpg_key_response(test_armor, "a")],
         headers={"ETag": '"abc"'},
     )
-    results = await source.search("a", "github_username")
+    result = await source.search("a", "github_username")
     await source.close()
-    assert len(results) == 1
+    assert len(result.keys) == 1
 
 
 @pytest.mark.asyncio
@@ -336,3 +335,26 @@ async def test_check_freshness_invalid_username_in_token_returns_true():
     result = await source.check_freshness("AABBCC", token)
     await source.close()
     assert result is True
+
+
+# ---------------------------------------------------------------------------
+# Token warning
+# ---------------------------------------------------------------------------
+
+
+def test_missing_token_logs_warning(caplog):
+    """GitHubSource warns when token_env is set but the env var is absent."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="hokeypokey.sources.github"):
+        make_github_source(extra_config={"token_env": "NONEXISTENT_GITHUB_TOKEN_XYZ"})
+    assert any("NONEXISTENT_GITHUB_TOKEN_XYZ" in r.message for r in caplog.records)
+    assert any("60/hour" in r.message for r in caplog.records)
+
+
+def test_present_token_no_warning(caplog, monkeypatch):
+    """GitHubSource does not warn when the token env var is set."""
+    import logging
+    monkeypatch.setenv("TEST_GITHUB_TOKEN_XYZ", "ghp_fake")
+    with caplog.at_level(logging.WARNING, logger="hokeypokey.sources.github"):
+        make_github_source(extra_config={"token_env": "TEST_GITHUB_TOKEN_XYZ"})
+    assert not any("60/hour" in r.message for r in caplog.records)
