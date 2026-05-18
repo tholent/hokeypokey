@@ -1,0 +1,143 @@
+# hokeypokey — Example Configuration File
+#
+# Copy this file to hokeypokey.toml and edit it for your environment.
+# All fields shown here are optional unless marked (required).
+
+# ---------------------------------------------------------------------------
+# [server] — HTTP/HTTPS server settings
+# ---------------------------------------------------------------------------
+
+[server]
+# Address to bind to. Use "0.0.0.0" to listen on all interfaces.
+host = "0.0.0.0"
+
+# Standard HKP port. HKPS (HKP over TLS) conventionally uses 443.
+port = 11371
+
+# TLS certificate and key for HKPS (HKP over TLS).
+# Leave empty to serve plain HTTP (suitable behind a TLS-terminating reverse proxy).
+# tls_cert = "/etc/ssl/certs/hokeypokey.crt"
+# tls_key  = "/etc/ssl/private/hokeypokey.key"
+
+# ---------------------------------------------------------------------------
+# [cache] — Key cache settings
+# ---------------------------------------------------------------------------
+
+[cache]
+# Cache backend. Currently only "memory" is supported.
+# Keys are cached in-process; the cache is empty on startup (lazy loading).
+backend = "memory"
+
+# Default time-to-live before a cached key's freshness is re-validated.
+# Supports: "30s", "5m", "1h", "2h30m"
+# Individual sources can override this with their own ttl setting.
+default_ttl = "10m"
+
+# ---------------------------------------------------------------------------
+# [[sources]] — Key sources (one block per source)
+#
+# Sources are queried lazily: keys are only fetched when a client requests them.
+# Multiple instances of the same source type are supported.
+# ---------------------------------------------------------------------------
+
+# ---- Corporate LDAP ----
+[[sources]]
+# (required) Unique name for this source instance.
+name = "corporate-ldap"
+
+# (required) Source type. Built-in types: "ldap", "github"
+type = "ldap"
+
+# (required) Priority — lower number = more authoritative.
+# When the same key fingerprint appears in multiple sources, the source with
+# the lowest priority number wins.
+priority = 10
+
+# Per-source TTL override (optional). Overrides [cache].default_ttl.
+ttl = "5m"
+
+[sources.config]
+# (required) LDAP server URI. Supports ldap://, ldaps://, and STARTTLS.
+uri = "ldaps://ldap.corp.example.com"
+
+# (required) Base DN for searches.
+base_dn = "ou=people,dc=corp,dc=example,dc=com"
+
+# Bind DN for authenticated bind (optional; omit for anonymous bind).
+bind_dn = "cn=readonly,dc=corp,dc=example,dc=com"
+
+# Environment variable holding the bind password.
+# The password is never stored in this file.
+bind_password_env = "LDAP_BIND_PASSWORD"
+
+# LDAP attribute containing the PGP public key (default: "pgpKey").
+key_attribute = "pgpKey"
+
+# Base LDAP search filter applied to all queries (default: "(pgpKey=*)").
+# The source appends a field-specific filter automatically.
+search_filter = "(pgpKey=*)"
+
+# Optional: LDAP attribute that stores the key fingerprint.
+# If set, enables fetch-by-fingerprint lookups directly from LDAP.
+# fingerprint_attribute = "pgpCertID"
+
+# Field mappings: logical field name → LDAP attribute name.
+# These define what fields are searchable and how they map to LDAP attributes.
+# Field names must be globally unique across all sources.
+[sources.config.fields]
+email       = "mail"           # Search by email address
+username    = "uid"            # Search by LDAP username
+employee_id = "employeeNumber" # Search by employee ID
+# github_id = "githubUsername" # Uncomment if your LDAP stores GitHub usernames
+
+# ---- GitHub Organisation ----
+[[sources]]
+name     = "github-org"
+type     = "github"
+priority = 50
+ttl      = "15m"
+
+[sources.config]
+# Environment variable holding the GitHub personal access token.
+# Required scopes: read:user (for GPG key access)
+# The token is never stored in this file.
+token_env = "GITHUB_TOKEN"
+
+# GitHub API base URL (default: "https://api.github.com").
+# Override for GitHub Enterprise Server installations.
+# api_base = "https://github.example.com/api/v3"
+
+# Field mappings for GitHub.
+# Supported GitHub field names: "login" (username), "email"
+[sources.config.fields]
+github_username = "login"  # Search by GitHub username
+# github_email  = "email"  # Uncomment to enable email-based GitHub search
+
+# ---------------------------------------------------------------------------
+# [[resolvers]] — Cross-source search resolvers
+#
+# Resolvers bridge two sources: when a result from one source contains a
+# specific metadata field, the resolver triggers a lookup in another source.
+#
+# Example: LDAP stores each user's GitHub username in a custom attribute.
+# When a search finds an LDAP key, the resolver automatically fetches the
+# user's GitHub GPG keys too.
+# ---------------------------------------------------------------------------
+
+[[resolvers]]
+# (required) Unique name for this resolver.
+name = "ldap-to-github"
+
+# (required) Source that triggers this resolver.
+trigger_source = "corporate-ldap"
+
+# (required) Metadata field from the trigger source that activates the resolver.
+# Must match a key in the trigger source's [sources.config.fields] mapping.
+trigger_field = "github_id"
+
+# (required) Target source to query when the resolver fires.
+target_source = "github-org"
+
+# (required) Field in the target source to search against.
+# Must match a key in the target source's [sources.config.fields] mapping.
+target_field = "github_username"

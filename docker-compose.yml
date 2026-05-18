@@ -1,0 +1,19 @@
+services:
+  hokeypokey:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      # HKP standard port
+      - "11371:11371"
+    volumes:
+      # Mount your configuration file (read-only)
+      - ./hokeypokey.toml:/etc/hokeypokey/hokeypokey.toml:ro
+    environment:
+      # Credentials are passed via environment variables, never in the config file.
+      # Set these in your shell or a .env file before running docker compose up.
+      - LDAP_BIND_PASSWORD
+      - GITHUB_TOKEN
+    restart: unless-stopped
+    # Optional: override host/port without editing the config file
+    # command: ["--config", "/etc/hokeypokey/hokeypokey.toml", "--port", "11371"]

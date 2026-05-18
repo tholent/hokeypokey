@@ -378,7 +378,7 @@ Depends on Wave 2 (source interface, models). Can run in parallel with Waves 3-4
 Depends on Waves 3, 4, 5 (all components exist).
 
 ### Task 6.1 — Application factory and wiring
-- **Status:** `[ ]` pending
+- **Status:** `[x]` complete
 - **Agent:** `@developer`
 - **Files to create:**
   - `src/hokeypokey/app.py`
@@ -405,7 +405,7 @@ Depends on Waves 3, 4, 5 (all components exist).
   - `POST /pks/add` → 403
 
 ### Task 6.2 — Update HKP routes to use orchestrator from app context
-- **Status:** `[ ]` pending
+- **Status:** `[x]` complete
 - **Agent:** `@developer`
 - **Files to modify:**
   - `src/hokeypokey/hkp/routes.py`
@@ -421,7 +421,7 @@ Depends on Waves 3, 4, 5 (all components exist).
 Depends on Wave 6 (working application).
 
 ### Task 7.1 — Dockerfile and docker-compose
-- **Status:** `[ ]` pending
+- **Status:** `[x]` complete
 - **Agent:** `@developer`
 - **Files to create:**
   - `Dockerfile`
@@ -453,7 +453,7 @@ Depends on Wave 6 (working application).
 Depends on Wave 6 (fully assembled application).
 
 ### Task 8.1 — Integration tests with mock sources
-- **Status:** `[ ]` pending
+- **Status:** `[x]` complete
 - **Agent:** `@developer`
 - **Files to create:**
   - `tests/conftest.py` — shared fixtures (test PGP keys, mock sources, test app)
