@@ -34,6 +34,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the bind port from config",
     )
     parser.add_argument(
+        "--env-file",
+        metavar="PATH",
+        type=Path,
+        default=None,
+        help="Path to a .env file to load (default: .env in the current directory, if it exists)",
+    )
+    parser.add_argument(
         "--log-level",
         metavar="LEVEL",
         default="INFO",
@@ -47,6 +54,7 @@ def run(
     config_path: Path,
     host_override: str | None,
     port_override: int | None,
+    env_file: Path | None = None,
     log_level: str = "INFO",
 ) -> None:
     """Load config, create app, and serve with Hypercorn."""
@@ -54,6 +62,7 @@ def run(
 
     import hypercorn.asyncio
     import hypercorn.config
+    from dotenv import load_dotenv
 
     from hokeypokey.app import create_app
     from hokeypokey.config import ConfigError, load_config
@@ -64,6 +73,20 @@ def run(
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    log = logging.getLogger(__name__)
+
+    # Load .env file — must happen before config loading, because source
+    # configs reference environment variables (bind_password_env, token_env).
+    if env_file is not None:
+        if not env_file.exists():
+            print(f"error: env file not found: {env_file}", file=sys.stderr)
+            sys.exit(1)
+        load_dotenv(env_file, override=True)
+        log.info("Loaded environment from %s", env_file)
+    else:
+        # Try default .env in current directory (silent if missing)
+        if load_dotenv():
+            log.info("Loaded environment from .env")
 
     try:
         config = load_config(config_path)
@@ -88,7 +111,7 @@ def run(
         hc.keyfile = config.server.tls_key
 
     protocol = "hkps" if (config.server.tls_cert and config.server.tls_key) else "hkp"
-    logging.getLogger(__name__).info(
+    log.info(
         "Starting hokeypokey on %s://%s:%d with %d source(s)",
         protocol, config.server.host, config.server.port, len(config.sources),
     )
@@ -99,4 +122,4 @@ def run(
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    run(args.config, args.host, args.port, args.log_level)
+    run(args.config, args.host, args.port, args.env_file, args.log_level)
