@@ -87,9 +87,13 @@ class SearchOrchestrator:
             parsed, depth=self._max_depth, visited=visited, collected_fps=collected_fps
         )
 
-        # Gather results from cache, sorted by priority
+        # Gather results from cache, sorted by priority.
+        # collected_fps is mutated in-place by _query / _run_resolver_query
+        # (SonarQube S2583 false positive: it doesn't track cross-method set mutations).
+        # The `entry is not None` guard is also real: LRU eviction can drop an entry
+        # between it being added to collected_fps and this read-back.
         results: list[SourceKey] = []
-        for fp in collected_fps:
+        for fp in collected_fps:  # NOSONAR
             entry = self._cache.get_by_fingerprint(fp)
             if entry is not None:
                 results.append(entry.source_key)
