@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import ssl
 from typing import Any
 
 import pgpy
-from ldap3 import BASE, Connection, Server, SUBTREE, Tls
+from ldap3 import BASE, SUBTREE, Connection, Server, Tls
 from ldap3.utils.conv import escape_filter_chars
 
 from hokeypokey.models import FieldDefinition, SearchResult, SourceKey, SourceMetadata
@@ -98,7 +99,7 @@ class LDAPSource(KeySource):
             for logical, ldap_attr in self._fields.items()
         ]
 
-    async def search(self, query: str, field: str = "email") -> list[SourceKey] | SearchResult:
+    async def search(self, query: str, field: str = "email") -> SearchResult:
         """Search LDAP for entries matching *query* in *field*.
 
         Constructs a compound LDAP filter combining the base filter with a
@@ -142,7 +143,8 @@ class LDAPSource(KeySource):
                 logger.info(
                     "LDAP source %r: key attribute %r not in schema, "
                     "retrying without it (metadata-only)",
-                    self.name, self._key_attribute,
+                    self.name,
+                    self._key_attribute,
                 )
                 try:
                     entries = await asyncio.to_thread(
@@ -165,11 +167,7 @@ class LDAPSource(KeySource):
         escaped_fp = escape_filter_chars(fingerprint)
         search_filter = f"(&{self._base_filter}({self._fingerprint_attribute}={escaped_fp}))"
 
-        attrs_to_fetch = (
-            [self._key_attribute]
-            + list(self._fields.values())
-            + ["modifyTimestamp"]
-        )
+        attrs_to_fetch = [self._key_attribute] + list(self._fields.values()) + ["modifyTimestamp"]
 
         try:
             entries = await asyncio.to_thread(
@@ -219,7 +217,7 @@ class LDAPSource(KeySource):
     def _ldap_search(
         self,
         base: str,
-        scope,
+        scope: str,
         search_filter: str,
         attributes: list[str],
     ) -> list[dict[str, Any]]:
@@ -256,10 +254,8 @@ class LDAPSource(KeySource):
                 results.append(row)
             return results
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 conn.unbind()
-            except Exception:
-                pass
 
     def _extract_metadata(self, entry: dict[str, Any]) -> dict[str, str]:
         """Extract metadata from an LDAP entry using the configured field mappings."""
@@ -305,15 +301,18 @@ class LDAPSource(KeySource):
                 except Exception as exc:
                     logger.warning(
                         "Failed to parse PGP key from LDAP entry %r: %s",
-                        entry.get("_dn"), exc,
+                        entry.get("_dn"),
+                        exc,
                     )
                     # Key is unparseable — treat as metadata-only
                     if metadata:
-                        result.metadata_only.append(SourceMetadata(
-                            metadata=metadata,
-                            source_name=self.name,
-                            source_priority=self.priority,
-                        ))
+                        result.metadata_only.append(
+                            SourceMetadata(
+                                metadata=metadata,
+                                source_name=self.name,
+                                source_priority=self.priority,
+                            )
+                        )
                     continue
 
                 # Build freshness token
@@ -323,24 +322,29 @@ class LDAPSource(KeySource):
                     modify_ts = modify_ts[0] if modify_ts else ""
                 freshness_token = f"{dn}{_FRESHNESS_SEP}{modify_ts}"
 
-                result.keys.append(SourceKey(
-                    fingerprint=fingerprint,
-                    key_armor=raw_key,
-                    metadata=metadata,
-                    freshness_token=freshness_token,
-                    source_name=self.name,
-                    source_priority=self.priority,
-                ))
+                result.keys.append(
+                    SourceKey(
+                        fingerprint=fingerprint,
+                        key_armor=raw_key,
+                        metadata=metadata,
+                        freshness_token=freshness_token,
+                        source_name=self.name,
+                        source_priority=self.priority,
+                    )
+                )
             elif metadata:
                 # No PGP key, but has metadata — can still trigger resolvers
                 logger.debug(
                     "LDAP entry %r has no PGP key but has metadata: %s",
-                    entry.get("_dn"), list(metadata.keys()),
+                    entry.get("_dn"),
+                    list(metadata.keys()),
                 )
-                result.metadata_only.append(SourceMetadata(
-                    metadata=metadata,
-                    source_name=self.name,
-                    source_priority=self.priority,
-                ))
+                result.metadata_only.append(
+                    SourceMetadata(
+                        metadata=metadata,
+                        source_name=self.name,
+                        source_priority=self.priority,
+                    )
+                )
 
         return result

@@ -12,8 +12,13 @@ from __future__ import annotations
 
 import html
 import logging
+from typing import TYPE_CHECKING
 
 from quart import Blueprint, current_app, request
+from quart.typing import ResponseReturnValue
+
+if TYPE_CHECKING:
+    from hokeypokey.orchestrator import SearchOrchestrator
 
 from hokeypokey import __version__
 from hokeypokey.hkp.formatter import format_get_response, format_index_response
@@ -44,17 +49,18 @@ _CORS_PREFLIGHT_HEADERS = {
 }
 
 
-def _orchestrator():
+def _orchestrator() -> SearchOrchestrator:
     """Retrieve the SearchOrchestrator from the current app's extensions."""
-    return current_app.extensions["orchestrator"]
+    return current_app.extensions["orchestrator"]  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------
 # GET /  — human-readable landing page
 # ---------------------------------------------------------------------------
 
+
 @hkp_bp.route("/", methods=["GET"])
-async def index():
+async def index() -> ResponseReturnValue:
     """Return a simple HTML status page for browser visitors."""
     orchestrator = _orchestrator()
     source_names = list(orchestrator._sources.keys())
@@ -96,8 +102,16 @@ async def index():
   <h2>Endpoints</h2>
   <table>
     <tr><th>Method</th><th>Path</th><th>Description</th></tr>
-    <tr><td>GET</td><td><code>/pks/lookup?op=get&amp;search=...</code></td><td>Retrieve ASCII-armored key</td></tr>
-    <tr><td>GET</td><td><code>/pks/lookup?op=index&amp;search=...</code></td><td>Machine-readable key index</td></tr>
+    <tr>
+      <td>GET</td>
+      <td><code>/pks/lookup?op=get&amp;search=...</code></td>
+      <td>Retrieve ASCII-armored key</td>
+    </tr>
+    <tr>
+      <td>GET</td>
+      <td><code>/pks/lookup?op=index&amp;search=...</code></td>
+      <td>Machine-readable key index</td>
+    </tr>
     <tr><td>POST</td><td><code>/pks/add</code></td><td>403 &mdash; read-only server</td></tr>
   </table>
 
@@ -114,8 +128,9 @@ async def index():
 # GET /pks/lookup
 # ---------------------------------------------------------------------------
 
+
 @hkp_bp.route("/pks/lookup", methods=["GET", "OPTIONS"])
-async def lookup():
+async def lookup() -> ResponseReturnValue:
     if request.method == "OPTIONS":
         return ("", 204, _CORS_PREFLIGHT_HEADERS)
 
@@ -163,8 +178,9 @@ async def lookup():
 # POST /pks/add  — read-only; always reject
 # ---------------------------------------------------------------------------
 
+
 @hkp_bp.route("/pks/add", methods=["POST"])
-async def add():
+async def add() -> ResponseReturnValue:
     return (
         "Keyserver is read-only. Key submission is not supported.",
         403,
@@ -176,8 +192,9 @@ async def add():
 # GET /healthz  — liveness/readiness probe
 # ---------------------------------------------------------------------------
 
+
 @hkp_bp.route("/healthz", methods=["GET"])
-async def healthz():
+async def healthz() -> ResponseReturnValue:
     source_count = len(_orchestrator()._sources)
     return (
         f"ok\nsources: {source_count}\n",

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from hokeypokey.models import (
+    CachedKey,
     ParsedSearch,
     ResolvedQuery,
     SearchResult,
@@ -81,7 +83,9 @@ class SearchOrchestrator:
         visited: set[tuple[str, str, str]] = set()
         collected_fps: set[str] = set()
 
-        await self._query(parsed, depth=self._max_depth, visited=visited, collected_fps=collected_fps)
+        await self._query(
+            parsed, depth=self._max_depth, visited=visited, collected_fps=collected_fps
+        )
 
         # Gather results from cache, sorted by priority
         results: list[SourceKey] = []
@@ -133,11 +137,9 @@ class SearchOrchestrator:
 
         # ---- 2. Revalidate stale entries ----
         if stale_entries:
-            revalidation_tasks = [
-                self._revalidate(entry) for entry in stale_entries
-            ]
+            revalidation_tasks = [self._revalidate(entry) for entry in stale_entries]
             revalidated = await asyncio.gather(*revalidation_tasks, return_exceptions=True)
-            for entry, result in zip(stale_entries, revalidated):
+            for entry, result in zip(stale_entries, revalidated, strict=True):
                 fp = entry.source_key.fingerprint
                 if isinstance(result, Exception):
                     logger.warning("Freshness check failed for %s: %s", fp, result)
@@ -188,17 +190,21 @@ class SearchOrchestrator:
         # c) metadata-only results (no PGP key, but have resolver-triggering fields)
         all_keys_for_resolvers: list[SourceKey] = list(new_keys)
         for fp in fresh_fps:
-            entry = self._cache.get_by_fingerprint(fp)
-            if entry is not None:
-                all_keys_for_resolvers.append(entry.source_key)
+            cached = self._cache.get_by_fingerprint(fp)
+            if cached is not None:
+                all_keys_for_resolvers.append(cached.source_key)
 
         resolver_queries = self._collect_resolver_queries(
-            all_keys_for_resolvers, visited, extra_metadata=new_metadata,
+            all_keys_for_resolvers,
+            visited,
+            extra_metadata=new_metadata,
         )
 
         if resolver_queries:
             resolver_tasks = [
-                self._run_resolver_query(rq, depth=depth, visited=visited, collected_fps=collected_fps)
+                self._run_resolver_query(
+                    rq, depth=depth, visited=visited, collected_fps=collected_fps
+                )
                 for rq in resolver_queries
             ]
             await asyncio.gather(*resolver_tasks, return_exceptions=True)
@@ -227,7 +233,12 @@ class SearchOrchestrator:
         try:
             result = await source.search(rq.search_value, rq.search_field)
         except Exception as exc:
-            logger.warning("Resolver source query failed for %s/%s: %s", rq.target_source, rq.search_field, exc)
+            logger.warning(
+                "Resolver source query failed for %s/%s: %s",
+                rq.target_source,
+                rq.search_field,
+                exc,
+            )
             return
 
         if isinstance(result, SearchResult):
@@ -242,18 +253,20 @@ class SearchOrchestrator:
             collected_fps.add(key.fingerprint)
 
         # Run further resolvers on the results (depth - 1)
-        further_queries = self._collect_resolver_queries(keys, visited, extra_metadata=extra_metadata)
+        further_queries = self._collect_resolver_queries(
+            keys, visited, extra_metadata=extra_metadata
+        )
         if further_queries:
             tasks = [
-                self._run_resolver_query(fq, depth=depth - 1, visited=visited, collected_fps=collected_fps)
+                self._run_resolver_query(
+                    fq, depth=depth - 1, visited=visited, collected_fps=collected_fps
+                )
                 for fq in further_queries
             ]
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    def _cache_lookup(self, parsed: ParsedSearch):
+    def _cache_lookup(self, parsed: ParsedSearch) -> list[CachedKey]:
         """Return cached entries matching *parsed* (may be fresh or stale)."""
-        from hokeypokey.models import CachedKey
-
         if parsed.search_type == SearchType.FINGERPRINT:
             entry = self._cache.get_by_fingerprint(parsed.normalized)
             return [entry] if entry is not None else []
@@ -282,7 +295,7 @@ class SearchOrchestrator:
 
         return []
 
-    async def _revalidate(self, entry) -> bool:
+    async def _revalidate(self, entry: CachedKey) -> bool:
         """Ask the originating source whether *entry* is still fresh."""
         source = self._sources.get(entry.source_key.source_name)
         if source is None:
@@ -306,7 +319,7 @@ class SearchOrchestrator:
             # Key ID lookups are cache-only; sources don't index by key ID
             return _FanOutResult(keys=[], metadata=[])
 
-        tasks = []
+        tasks: list[Coroutine[Any, Any, SourceKey | None | SearchResult]] = []
 
         for source in self._sources.values():
             if parsed.search_type == SearchType.FINGERPRINT:
@@ -382,7 +395,7 @@ class SearchOrchestrator:
         metadata_items: list[tuple[dict[str, str], str]] = [
             (key.metadata, key.source_name) for key in keys
         ]
-        for meta in (extra_metadata or []):
+        for meta in extra_metadata or []:
             metadata_items.append((meta.metadata, meta.source_name))
 
         for metadata, source_name in metadata_items:

@@ -58,9 +58,7 @@ class KeyCache:
         self._by_email: dict[str, set[str]] = defaultdict(set)
 
         # Index: field_name → { value → set of fingerprints }
-        self._by_field: dict[str, dict[str, set[str]]] = defaultdict(
-            lambda: defaultdict(set)
-        )
+        self._by_field: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -247,9 +245,7 @@ class KeyCache:
                          value to match.
         """
         to_remove = [
-            fp
-            for fp, entry in self._store.items()
-            if entry.source_key.source_name == source_name
+            fp for fp, entry in self._store.items() if entry.source_key.source_name == source_name
         ]
         for fp in to_remove:
             self.remove(fp)

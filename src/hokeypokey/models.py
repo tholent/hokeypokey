@@ -10,11 +10,11 @@ from enum import Enum
 class SearchType(Enum):
     """Classification of an HKP search term."""
 
-    FINGERPRINT = "fingerprint"   # 40-hex V4 fingerprint (0x prefix stripped)
-    LONG_KEY_ID = "long_key_id"   # 16-hex long key ID
-    SHORT_KEY_ID = "short_key_id" # 8-hex short key ID (accepted but discouraged)
-    EMAIL = "email"               # email address (contains @)
-    TEXT = "text"                 # free-text UID search
+    FINGERPRINT = "fingerprint"  # 40-hex V4 fingerprint (0x prefix stripped)
+    LONG_KEY_ID = "long_key_id"  # 16-hex long key ID
+    SHORT_KEY_ID = "short_key_id"  # 8-hex short key ID (accepted but discouraged)
+    EMAIL = "email"  # email address (contains @)
+    TEXT = "text"  # free-text UID search
 
 
 @dataclass
@@ -22,8 +22,8 @@ class ParsedSearch:
     """A parsed and normalised HKP search term."""
 
     search_type: SearchType
-    raw: str        # original value as received from the client
-    normalized: str # canonical form: uppercase hex for IDs/fingerprints, lowercase for email
+    raw: str  # original value as received from the client
+    normalized: str  # canonical form: uppercase hex for IDs/fingerprints, lowercase for email
 
 
 @dataclass
@@ -95,7 +95,7 @@ class CachedKey:
         return (self.cached_at + self.ttl) > time.time()
 
     def touch(self) -> None:
-        """Reset the TTL clock without changing the key data (used after a successful freshness check)."""
+        """Reset the TTL clock, marking the entry as freshly validated."""
         self.cached_at = time.time()
 
 

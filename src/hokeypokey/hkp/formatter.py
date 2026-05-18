@@ -8,7 +8,6 @@ HKP draft (draft-shaw-openpgp-hkp-00 / draft-gallagher-openpgp-hkp-09).
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
@@ -43,22 +42,23 @@ _ALGO_MAP: dict[str, int] = {
 # Key metadata extraction
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _UIDInfo:
     uid_string: str
-    created: int        # unix timestamp
-    expires: int | None # unix timestamp or None
-    flags: str          # "r", "e", "d" or combinations
+    created: int  # unix timestamp
+    expires: int | None  # unix timestamp or None
+    flags: str  # "r", "e", "d" or combinations
 
 
 @dataclass
 class _KeyInfo:
-    fingerprint: str    # uppercase hex, no 0x
-    algo: int           # RFC 9580 algorithm number
+    fingerprint: str  # uppercase hex, no 0x
+    algo: int  # RFC 9580 algorithm number
     keylen: int | None  # bits, None for ECC
-    created: int        # unix timestamp
-    expires: int | None # unix timestamp or None
-    flags: str          # "r", "e", "d" or combinations
+    created: int  # unix timestamp
+    expires: int | None  # unix timestamp or None
+    flags: str  # "r", "e", "d" or combinations
     uids: list[_UIDInfo] = field(default_factory=list)
 
 
@@ -78,13 +78,12 @@ def parse_key_metadata(armor: str) -> _KeyInfo | None:
         logger.warning("Failed to parse PGP key: %s", exc)
         return None
 
-    # Fingerprint
-    fingerprint = key.fingerprint.keyid  # full fingerprint string
-    # pgpy fingerprint is already uppercase hex
     fp = str(key.fingerprint).replace(" ", "").upper()
 
     # Algorithm
-    algo_name = key.key_algorithm.name if hasattr(key.key_algorithm, "name") else str(key.key_algorithm)
+    algo_name = (
+        key.key_algorithm.name if hasattr(key.key_algorithm, "name") else str(key.key_algorithm)
+    )
     algo_num = _ALGO_MAP.get(algo_name, 0)
 
     # Key length (bits) — meaningful for RSA/DSA/ElGamal, not ECC
@@ -138,12 +137,14 @@ def parse_key_metadata(armor: str) -> _KeyInfo | None:
         except Exception:
             pass
 
-        uid_infos.append(_UIDInfo(
-            uid_string=uid_str,
-            created=uid_created_ts,
-            expires=uid_expires_ts,
-            flags=uid_flags,
-        ))
+        uid_infos.append(
+            _UIDInfo(
+                uid_string=uid_str,
+                created=uid_created_ts,
+                expires=uid_expires_ts,
+                flags=uid_flags,
+            )
+        )
 
     return _KeyInfo(
         fingerprint=fp,
@@ -159,6 +160,7 @@ def parse_key_metadata(armor: str) -> _KeyInfo | None:
 # ---------------------------------------------------------------------------
 # UID percent-encoding
 # ---------------------------------------------------------------------------
+
 
 def _encode_uid(uid: str) -> str:
     """Percent-encode a UID string for the HKP machine-readable index.
@@ -177,6 +179,7 @@ def _encode_uid(uid: str) -> str:
 # ---------------------------------------------------------------------------
 # Public formatters
 # ---------------------------------------------------------------------------
+
 
 def format_index_response(keys: list[SourceKey]) -> str:
     """Format a list of keys as an HKP machine-readable index response.
@@ -222,9 +225,7 @@ def format_index_response(keys: list[SourceKey]) -> str:
         for uid in info.uids:
             encoded = _encode_uid(uid.uid_string)
             uid_expires_str = str(uid.expires) if uid.expires is not None else ""
-            lines.append(
-                f"uid:{encoded}:{uid.created}:{uid_expires_str}:{uid.flags}"
-            )
+            lines.append(f"uid:{encoded}:{uid.created}:{uid_expires_str}:{uid.flags}")
 
     return "\n".join(lines) + "\n"
 

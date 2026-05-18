@@ -18,6 +18,7 @@ _REGISTRY: dict[str, type[KeySource]] | None = None
 def _build_registry() -> dict[str, type[KeySource]]:
     from hokeypokey.sources.github import GitHubSource
     from hokeypokey.sources.ldap import LDAPSource
+
     return {"ldap": LDAPSource, "github": GitHubSource}
 
 
@@ -42,10 +43,9 @@ def get_source_class(type_name: str) -> type[KeySource]:
         _REGISTRY = _build_registry()
 
     from hokeypokey.config import ConfigError
+
     try:
         return _REGISTRY[type_name]
     except KeyError:
         known = ", ".join(sorted(_REGISTRY))
-        raise ConfigError(
-            f"Unknown source type {type_name!r}. Known types: {known}."
-        ) from None
+        raise ConfigError(f"Unknown source type {type_name!r}. Known types: {known}.") from None

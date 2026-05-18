@@ -11,7 +11,7 @@ from pathlib import Path
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="hokeypokey",
-        description="A read-only HKP/HKPS keyserver that federates GPG keys from pluggable sources.",
+        description="Read-only HKP/HKPS keyserver that federates GPG keys from pluggable sources.",
     )
     parser.add_argument(
         "--config",
@@ -113,7 +113,10 @@ def run(
     protocol = "hkps" if (config.server.tls_cert and config.server.tls_key) else "hkp"
     log.info(
         "Starting hokeypokey on %s://%s:%d with %d source(s)",
-        protocol, config.server.host, config.server.port, len(config.sources),
+        protocol,
+        config.server.host,
+        config.server.port,
+        len(config.sources),
     )
 
     asyncio.run(hypercorn.asyncio.serve(app, hc))

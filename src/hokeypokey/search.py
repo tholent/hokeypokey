@@ -55,9 +55,7 @@ def parse_search(raw: str) -> ParsedSearch:
             raise ValueError("Key ID must not be empty after '0x' prefix.")
 
         if not _HEX_RE.match(hex_part):
-            raise ValueError(
-                f"Key ID {raw!r} contains non-hexadecimal characters."
-            )
+            raise ValueError(f"Key ID {raw!r} contains non-hexadecimal characters.")
 
         if len(hex_part) not in _VALID_HEX_LENGTHS:
             raise ValueError(

@@ -67,7 +67,8 @@ class GitHubSource(KeySource):
                 logger.warning(
                     "GitHub source %r: environment variable %r is not set. "
                     "Unauthenticated requests are limited to 60/hour.",
-                    name, token_env,
+                    name,
+                    token_env,
                 )
 
         headers = {
@@ -122,7 +123,9 @@ class GitHubSource(KeySource):
 
         logger.debug(
             "GitHub source %r: unsupported field mapping %r → %r",
-            self.name, field, gh_field,
+            self.name,
+            field,
+            gh_field,
         )
         return SearchResult()
 
@@ -147,7 +150,8 @@ class GitHubSource(KeySource):
         if not self._validate_username(username):
             logger.debug(
                 "GitHub source %r: invalid username %r in freshness token, assuming fresh",
-                self.name, username,
+                self.name,
+                username,
             )
             return True  # assume fresh — don't make a request with a bad username
 
@@ -167,7 +171,8 @@ class GitHubSource(KeySource):
         # Any other status (rate limit, auth error, etc.) — assume fresh
         logger.warning(
             "GitHub freshness check for source %r returned unexpected status %d",
-            self.name, resp.status_code,
+            self.name,
+            resp.status_code,
         )
         return True
 
@@ -204,9 +209,7 @@ class GitHubSource(KeySource):
     async def _fetch_keys_for_username(self, username: str) -> list[SourceKey]:
         """Fetch all GPG keys for a specific GitHub username."""
         if not self._validate_username(username):
-            logger.debug(
-                "GitHub source %r: rejecting invalid username %r", self.name, username
-            )
+            logger.debug("GitHub source %r: rejecting invalid username %r", self.name, username)
             return []
 
         try:
@@ -219,7 +222,8 @@ class GitHubSource(KeySource):
             retry_after = resp.headers.get("Retry-After", "unknown")
             logger.warning(
                 "GitHub rate limit hit for source %r (retry after: %s)",
-                self.name, retry_after,
+                self.name,
+                retry_after,
             )
             return []
 
@@ -229,7 +233,9 @@ class GitHubSource(KeySource):
         if resp.status_code != 200:
             logger.warning(
                 "GitHub API returned %d for source %r user %r",
-                resp.status_code, self.name, username,
+                resp.status_code,
+                self.name,
+                username,
             )
             return []
 
@@ -262,7 +268,8 @@ class GitHubSource(KeySource):
         if resp.status_code != 200:
             logger.warning(
                 "GitHub user search returned %d for source %r",
-                resp.status_code, self.name,
+                resp.status_code,
+                self.name,
             )
             return []
 
@@ -301,9 +308,7 @@ class GitHubSource(KeySource):
                 pgp_key, _ = pgpy.PGPKey.from_blob(raw_key)
                 fingerprint = str(pgp_key.fingerprint).replace(" ", "").upper()
             except Exception as exc:
-                logger.warning(
-                    "Failed to parse PGP key for GitHub user %r: %s", username, exc
-                )
+                logger.warning("Failed to parse PGP key for GitHub user %r: %s", username, exc)
                 continue
 
             # Build metadata
@@ -316,7 +321,7 @@ class GitHubSource(KeySource):
 
             # Collect email addresses from the key's emails list
             email_logical = self._reverse_fields.get("email")
-            gh_emails: list[dict] = key_data.get("emails", [])
+            gh_emails: list[dict[str, Any]] = key_data.get("emails", [])
             if gh_emails and email_logical:
                 # Use the first verified email if available
                 verified = [e["email"] for e in gh_emails if e.get("verified")]
@@ -325,13 +330,15 @@ class GitHubSource(KeySource):
                 if primary:
                     metadata[email_logical] = primary
 
-            keys.append(SourceKey(
-                fingerprint=fingerprint,
-                key_armor=raw_key,
-                metadata=metadata,
-                freshness_token=freshness_token,
-                source_name=self.name,
-                source_priority=self.priority,
-            ))
+            keys.append(
+                SourceKey(
+                    fingerprint=fingerprint,
+                    key_armor=raw_key,
+                    metadata=metadata,
+                    freshness_token=freshness_token,
+                    source_name=self.name,
+                    source_priority=self.priority,
+                )
+            )
 
         return keys

@@ -48,7 +48,10 @@ def create_app(config: AppConfig) -> Quart:
         sources[src_cfg.name] = source
         logger.info(
             "Registered source %r (type=%s, priority=%d, ttl=%ds)",
-            src_cfg.name, src_cfg.type, src_cfg.priority, ttl,
+            src_cfg.name,
+            src_cfg.type,
+            src_cfg.priority,
+            ttl,
         )
 
     # ---- Resolvers ----
@@ -56,8 +59,11 @@ def create_app(config: AppConfig) -> Quart:
     for r in resolvers:
         logger.info(
             "Registered resolver %r (%s.%s → %s.%s)",
-            r.name, r.trigger_source, r.trigger_field,
-            r.target_source, r.target_field,
+            r.name,
+            r.trigger_source,
+            r.trigger_field,
+            r.target_source,
+            r.target_field,
         )
 
     # ---- Orchestrator ----
