@@ -354,32 +354,63 @@ class SearchOrchestrator:
         visited: set[tuple[str, str, str]],
     ) -> list[Coroutine[Any, Any, SourceKey | None | SearchResult]]:
         """Build the list of source coroutines to execute for *parsed*."""
+        dispatch = {
+            SearchType.FINGERPRINT: self._fingerprint_tasks,
+            SearchType.EMAIL: self._email_tasks,
+            SearchType.TEXT: self._text_tasks,
+        }
+        handler = dispatch.get(parsed.search_type)
+        if handler is None:
+            return []
         tasks: list[Coroutine[Any, Any, SourceKey | None | SearchResult]] = []
         for source in self._sources.values():
-            if parsed.search_type == SearchType.FINGERPRINT:
-                visit_key = (source.name, "__fingerprint__", parsed.normalized)
-                if visit_key not in visited:
-                    visited.add(visit_key)
-                    tasks.append(source.fetch_by_fingerprint(parsed.normalized))
-            elif parsed.search_type == SearchType.EMAIL:
-                # Only query sources that declare an "email" field
-                field_names = {f.name for f in source.searchable_fields()}
-                if "email" not in field_names:
-                    continue
-                visit_key = (source.name, "email", parsed.normalized)
-                if visit_key not in visited:
-                    visited.add(visit_key)
-                    tasks.append(source.search(parsed.normalized, "email"))
-            elif parsed.search_type == SearchType.TEXT:
-                # Fields with text_searchable=False (e.g. github_username) are only
-                # reachable via resolvers or explicit field-qualified queries.
-                for field_def in source.searchable_fields():
-                    if not field_def.text_searchable:
-                        continue
-                    visit_key = (source.name, field_def.name, parsed.normalized)
-                    if visit_key not in visited:
-                        visited.add(visit_key)
-                        tasks.append(source.search(parsed.normalized, field_def.name))
+            tasks.extend(handler(source, parsed, visited))
+        return tasks
+
+    def _fingerprint_tasks(
+        self,
+        source: KeySource,
+        parsed: ParsedSearch,
+        visited: set[tuple[str, str, str]],
+    ) -> list[Coroutine[Any, Any, SourceKey | None | SearchResult]]:
+        visit_key = (source.name, "__fingerprint__", parsed.normalized)
+        if visit_key in visited:
+            return []
+        visited.add(visit_key)
+        return [source.fetch_by_fingerprint(parsed.normalized)]
+
+    def _email_tasks(
+        self,
+        source: KeySource,
+        parsed: ParsedSearch,
+        visited: set[tuple[str, str, str]],
+    ) -> list[Coroutine[Any, Any, SourceKey | None | SearchResult]]:
+        # Only query sources that declare an "email" field
+        if "email" not in {f.name for f in source.searchable_fields()}:
+            return []
+        visit_key = (source.name, "email", parsed.normalized)
+        if visit_key in visited:
+            return []
+        visited.add(visit_key)
+        return [source.search(parsed.normalized, "email")]
+
+    def _text_tasks(
+        self,
+        source: KeySource,
+        parsed: ParsedSearch,
+        visited: set[tuple[str, str, str]],
+    ) -> list[Coroutine[Any, Any, SourceKey | None | SearchResult]]:
+        # Fields with text_searchable=False (e.g. github_username) are only
+        # reachable via resolvers or explicit field-qualified queries.
+        tasks: list[Coroutine[Any, Any, SourceKey | None | SearchResult]] = []
+        for field_def in source.searchable_fields():
+            if not field_def.text_searchable:
+                continue
+            visit_key = (source.name, field_def.name, parsed.normalized)
+            if visit_key in visited:
+                continue
+            visited.add(visit_key)
+            tasks.append(source.search(parsed.normalized, field_def.name))
         return tasks
 
     def _collect_fan_out_results(
