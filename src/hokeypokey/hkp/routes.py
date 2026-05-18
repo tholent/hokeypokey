@@ -35,6 +35,14 @@ _CORS_HEADERS = {"Access-Control-Allow-Origin": "*"}
 # Combined headers for plain-text error responses
 _ERR_HEADERS = {**_CORS_HEADERS, "Content-Type": _PLAIN}
 
+# Preflight response headers for OPTIONS requests
+_CORS_PREFLIGHT_HEADERS = {
+    **_CORS_HEADERS,
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Max-Age": "86400",
+}
+
 
 def _orchestrator():
     """Retrieve the SearchOrchestrator from the current app's extensions."""
@@ -106,8 +114,11 @@ async def index():
 # GET /pks/lookup
 # ---------------------------------------------------------------------------
 
-@hkp_bp.route("/pks/lookup", methods=["GET"])
+@hkp_bp.route("/pks/lookup", methods=["GET", "OPTIONS"])
 async def lookup():
+    if request.method == "OPTIONS":
+        return ("", 204, _CORS_PREFLIGHT_HEADERS)
+
     op = request.args.get("op", "").strip().lower()
     search_term = request.args.get("search", "").strip()
 
@@ -124,8 +135,8 @@ async def lookup():
     # --- Parse search term ---
     try:
         parsed = parse_search(search_term)
-    except ValueError as exc:
-        return (str(exc), 400, _ERR_HEADERS)
+    except ValueError:
+        return ("Invalid search term", 400, _ERR_HEADERS)
 
     # --- Execute lookup ---
     orchestrator = _orchestrator()
@@ -158,4 +169,18 @@ async def add():
         "Keyserver is read-only. Key submission is not supported.",
         403,
         _ERR_HEADERS,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /healthz  — liveness/readiness probe
+# ---------------------------------------------------------------------------
+
+@hkp_bp.route("/healthz", methods=["GET"])
+async def healthz():
+    source_count = len(_orchestrator()._sources)
+    return (
+        f"ok\nsources: {source_count}\n",
+        200,
+        {**_CORS_HEADERS, "Content-Type": _PLAIN},
     )

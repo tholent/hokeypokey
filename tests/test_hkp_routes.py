@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from quart import Quart
@@ -143,11 +143,13 @@ async def test_unknown_op_returns_501():
 
 @pytest.mark.asyncio
 async def test_invalid_hex_search_returns_400():
-    """A 0x-prefixed search with invalid hex should return 400."""
+    """A 0x-prefixed search with invalid hex should return 400 with a sanitized message."""
     app = make_test_app()
     async with app.test_client() as client:
         resp = await client.get("/pks/lookup?op=get&search=0xZZZZZZZZ")
     assert resp.status_code == 400
+    body = await resp.get_data(as_text=True)
+    assert body == "Invalid search term"
 
 
 # ---------------------------------------------------------------------------
@@ -249,3 +251,46 @@ async def test_landing_page_returns_200():
 
     assert resp.status_code == 200
     assert "text/html" in resp.content_type
+
+
+# ---------------------------------------------------------------------------
+# OPTIONS /pks/lookup  — CORS preflight
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_options_preflight_returns_204():
+    app = make_test_app()
+    async with app.test_client() as client:
+        resp = await client.options("/pks/lookup")
+    assert resp.status_code == 204
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+    assert "GET" in resp.headers.get("Access-Control-Allow-Methods", "")
+
+
+# ---------------------------------------------------------------------------
+# GET /healthz
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_healthz_returns_ok_with_source_count():
+    app = make_test_app()
+    app.extensions["orchestrator"]._sources = {"src1": MagicMock(), "src2": MagicMock()}
+    async with app.test_client() as client:
+        resp = await client.get("/healthz")
+    assert resp.status_code == 200
+    body = await resp.get_data(as_text=True)
+    assert "ok" in body
+    assert "sources: 2" in body
+
+
+@pytest.mark.asyncio
+async def test_healthz_zero_sources():
+    app = make_test_app()
+    app.extensions["orchestrator"]._sources = {}
+    async with app.test_client() as client:
+        resp = await client.get("/healthz")
+    assert resp.status_code == 200
+    body = await resp.get_data(as_text=True)
+    assert "sources: 0" in body
