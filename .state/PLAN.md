@@ -225,7 +225,7 @@ Depends on Wave 2 (cache, source interface).
 Depends on Wave 3 (orchestrator, search parser).
 
 ### Task 4.1 — HKP response formatting
-- **Status:** `[ ]` pending
+- **Status:** `[x]` complete
 - **Agent:** `@developer`
 - **Files to create:**
   - `src/hokeypokey/hkp/formatter.py`
@@ -253,7 +253,7 @@ Depends on Wave 3 (orchestrator, search parser).
   - Test `format_get_response` with two keys → two armor blocks separated by blank line
 
 ### Task 4.2 — HKP endpoint routes
-- **Status:** `[ ]` pending
+- **Status:** `[x]` complete
 - **Agent:** `@developer`
 - **Files to create:**
   - `src/hokeypokey/hkp/routes.py`
@@ -295,7 +295,7 @@ Depends on Wave 3 (orchestrator, search parser).
 Depends on Wave 2 (source interface, models). Can run in parallel with Waves 3-4 since plugins implement the interface defined in Wave 2.
 
 ### Task 5.1 — LDAP source plugin
-- **Status:** `[ ]` pending
+- **Status:** `[x]` complete
 - **Agent:** `@developer`
 - **Files to create:**
   - `src/hokeypokey/sources/ldap.py`
@@ -337,7 +337,7 @@ Depends on Wave 2 (source interface, models). Can run in parallel with Waves 3-4
   - Test `fetch_by_fingerprint` returns `None` when `fingerprint_attribute` is not configured
 
 ### Task 5.2 — GitHub source plugin
-- **Status:** `[ ]` pending
+- **Status:** `[x]` complete
 - **Agent:** `@developer`
 - **Files to create:**
   - `src/hokeypokey/sources/github.py`
