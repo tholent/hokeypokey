@@ -1,5 +1,7 @@
 # hokeypokey
 
+[![CI](https://github.com/tholent/hokeypokey/actions/workflows/ci.yml/badge.svg)](https://github.com/tholent/hokeypokey/actions/workflows/ci.yml) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tholent_hokeypokey&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=tholent_hokeypokey) [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=tholent_hokeypokey&metric=coverage)](https://sonarcloud.io/summary/new_code?id=tholent_hokeypokey)
+
 A read-only HKP/HKPS-compliant GPG keyserver that lazily fetches keys from pluggable upstream sources (LDAP, GitHub) and serves them to standard `gpg --keyserver` clients as a drop-in replacement.
 
 ## Overview
@@ -315,11 +317,11 @@ class MyCustomSource(KeySource):
 
     async def search(self, query: str, field: str = "email") -> list[SourceKey]:
         """Search for keys matching query against the named field.
-        
+
         Args:
             query: The search term (email, username, custom ID, etc.)
             field: The logical field name to search against
-            
+
         Returns:
             List of matching SourceKey objects with metadata and freshness tokens
         """
@@ -329,10 +331,10 @@ class MyCustomSource(KeySource):
 
     async def fetch_by_fingerprint(self, fingerprint: str) -> SourceKey | None:
         """Fetch a specific key by its fingerprint.
-        
+
         Args:
             fingerprint: Uppercase hex fingerprint without 0x prefix
-            
+
         Returns:
             The matching SourceKey, or None if not found or unsupported
         """
@@ -342,13 +344,13 @@ class MyCustomSource(KeySource):
 
     async def check_freshness(self, fingerprint: str, token: str) -> bool:
         """Check if a cached key is still fresh.
-        
+
         This should be a lightweight check — avoid fetching full key data.
-        
+
         Args:
             fingerprint: The key's fingerprint
             token: The opaque freshness token stored when the key was cached
-            
+
         Returns:
             True if the cached version is still current, False if it needs refetching
         """
@@ -358,7 +360,7 @@ class MyCustomSource(KeySource):
 
     def searchable_fields(self) -> list[FieldDefinition]:
         """Declare the fields this source can search against.
-        
+
         Returns:
             List of FieldDefinition objects describing each searchable field
         """
