@@ -141,57 +141,19 @@ class SearchOrchestrator:
 
         # ---- 2. Revalidate stale entries ----
         if stale_entries:
-            revalidation_tasks = [self._revalidate(entry) for entry in stale_entries]
-            revalidated = await asyncio.gather(*revalidation_tasks, return_exceptions=True)
-            for entry, result in zip(stale_entries, revalidated, strict=True):
-                fp = entry.source_key.fingerprint
-                if isinstance(result, Exception):
-                    logger.warning("Freshness check failed for %s: %s", fp, result)
-                    # Serve stale rather than nothing
-                    collected_fps.add(fp)
-                elif result:
-                    # Still fresh — touch the TTL clock
-                    entry.touch()
-                    collected_fps.add(fp)
-                else:
-                    # Stale — refetch
-                    source = self._sources.get(entry.source_key.source_name)
-                    if source is not None:
-                        try:
-                            new_key = await source.fetch_by_fingerprint(fp)
-                            if new_key is not None:
-                                self._cache.put(new_key, ttl=source.ttl)
-                                collected_fps.add(fp)
-                            else:
-                                # Key no longer exists in source — remove from cache
-                                self._cache.remove(fp)
-                        except Exception as exc:
-                            logger.warning("Refetch failed for %s: %s", fp, exc)
-                            collected_fps.add(fp)  # serve stale
+            await self._revalidate_stale_entries(stale_entries, collected_fps)
 
         # ---- 3. Cache miss — fan out to sources ----
-        # Only fan out if we didn't get anything from cache for this query
-        new_metadata: list[SourceMetadata] = []
         if not fresh_fps and not stale_entries:
-            fan_out_result = await self._fan_out(parsed, visited)
-            new_keys = fan_out_result.keys
-            new_metadata = fan_out_result.metadata
-            for key in new_keys:
-                source = self._sources.get(key.source_name)
-                ttl = source.ttl if source is not None else 600
-                self._cache.put(key, ttl=ttl)
-                collected_fps.add(key.fingerprint)
+            new_keys, new_metadata = await self._cache_miss_fan_out(parsed, visited, collected_fps)
         else:
-            new_keys = []
+            new_keys, new_metadata = [], []
 
         # ---- 4. Resolver pass (only if we have depth remaining) ----
         if depth <= 0:
             return
 
-        # Collect all metadata from:
-        # a) newly fetched keys (have PGP data + metadata)
-        # b) fresh cache hits (have PGP data + metadata)
-        # c) metadata-only results (no PGP key, but have resolver-triggering fields)
+        # Collect keys from: newly fetched, fresh cache hits, and metadata-only results.
         all_keys_for_resolvers: list[SourceKey] = list(new_keys)
         for fp in fresh_fps:
             cached = self._cache.get_by_fingerprint(fp)
@@ -212,6 +174,61 @@ class SearchOrchestrator:
                 for rq in resolver_queries
             ]
             await asyncio.gather(*resolver_tasks, return_exceptions=True)
+
+    async def _revalidate_stale_entries(
+        self,
+        stale_entries: list[CachedKey],
+        collected_fps: set[str],
+    ) -> None:
+        """Revalidate stale cache entries, refetching or evicting as needed."""
+        revalidation_tasks = [self._revalidate(entry) for entry in stale_entries]
+        revalidated = await asyncio.gather(*revalidation_tasks, return_exceptions=True)
+        for entry, result in zip(stale_entries, revalidated, strict=True):
+            fp = entry.source_key.fingerprint
+            if isinstance(result, Exception):
+                logger.warning("Freshness check failed for %s: %s", fp, result)
+                collected_fps.add(fp)  # serve stale rather than nothing
+            elif result:
+                entry.touch()  # still fresh — touch the TTL clock
+                collected_fps.add(fp)
+            else:
+                await self._refetch_stale(fp, entry.source_key.source_name, collected_fps)
+
+    async def _refetch_stale(
+        self,
+        fp: str,
+        source_name: str,
+        collected_fps: set[str],
+    ) -> None:
+        """Attempt to refetch a key that failed its freshness check."""
+        source = self._sources.get(source_name)
+        if source is None:
+            return
+        try:
+            new_key = await source.fetch_by_fingerprint(fp)
+            if new_key is not None:
+                self._cache.put(new_key, ttl=source.ttl)
+                collected_fps.add(fp)
+            else:
+                self._cache.remove(fp)  # key no longer exists in source
+        except Exception as exc:
+            logger.warning("Refetch failed for %s: %s", fp, exc)
+            collected_fps.add(fp)  # serve stale
+
+    async def _cache_miss_fan_out(
+        self,
+        parsed: ParsedSearch,
+        visited: set[tuple[str, str, str]],
+        collected_fps: set[str],
+    ) -> tuple[list[SourceKey], list[SourceMetadata]]:
+        """Fan out to all sources on a complete cache miss and cache the results."""
+        fan_out_result = await self._fan_out(parsed, visited)
+        for key in fan_out_result.keys:
+            source = self._sources.get(key.source_name)
+            ttl = source.ttl if source is not None else 600
+            self._cache.put(key, ttl=ttl)
+            collected_fps.add(key.fingerprint)
+        return fan_out_result.keys, fan_out_result.metadata
 
     async def _run_resolver_query(
         self,
@@ -282,22 +299,23 @@ class SearchOrchestrator:
             return self._cache.search(parsed.normalized, "email")
 
         if parsed.search_type == SearchType.TEXT:
-            # Text search: check cache indexes for text-searchable fields only
-            results: list[CachedKey] = []
-            seen: set[str] = set()
-            for source in self._sources.values():
-                for field_def in source.searchable_fields():
-                    if field_def.name == "email":
-                        continue
-                    if not field_def.text_searchable:
-                        continue
-                    for entry in self._cache.search(parsed.normalized, field_def.name):
-                        if entry.source_key.fingerprint not in seen:
-                            results.append(entry)
-                            seen.add(entry.source_key.fingerprint)
-            return results
+            return self._text_search_cache(parsed.normalized)
 
         return []
+
+    def _text_search_cache(self, normalized: str) -> list[CachedKey]:
+        """Search cache indexes for all text-searchable fields (excluding email)."""
+        results: list[CachedKey] = []
+        seen: set[str] = set()
+        for source in self._sources.values():
+            for field_def in source.searchable_fields():
+                if field_def.name == "email" or not field_def.text_searchable:
+                    continue
+                for entry in self._cache.search(normalized, field_def.name):
+                    if entry.source_key.fingerprint not in seen:
+                        results.append(entry)
+                        seen.add(entry.source_key.fingerprint)
+        return results
 
     async def _revalidate(self, entry: CachedKey) -> bool:
         """Ask the originating source whether *entry* is still fresh."""
@@ -323,60 +341,62 @@ class SearchOrchestrator:
             # Key ID lookups are cache-only; sources don't index by key ID
             return _FanOutResult(keys=[], metadata=[])
 
-        tasks: list[Coroutine[Any, Any, SourceKey | None | SearchResult]] = []
+        tasks = self._build_source_tasks(parsed, visited)
+        if not tasks:
+            return _FanOutResult(keys=[], metadata=[])
 
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+        return self._collect_fan_out_results(raw_results)
+
+    def _build_source_tasks(
+        self,
+        parsed: ParsedSearch,
+        visited: set[tuple[str, str, str]],
+    ) -> list[Coroutine[Any, Any, SourceKey | None | SearchResult]]:
+        """Build the list of source coroutines to execute for *parsed*."""
+        tasks: list[Coroutine[Any, Any, SourceKey | None | SearchResult]] = []
         for source in self._sources.values():
             if parsed.search_type == SearchType.FINGERPRINT:
                 visit_key = (source.name, "__fingerprint__", parsed.normalized)
-                if visit_key in visited:
-                    continue
-                visited.add(visit_key)
-                tasks.append(source.fetch_by_fingerprint(parsed.normalized))
-
+                if visit_key not in visited:
+                    visited.add(visit_key)
+                    tasks.append(source.fetch_by_fingerprint(parsed.normalized))
             elif parsed.search_type == SearchType.EMAIL:
                 # Only query sources that declare an "email" field
                 field_names = {f.name for f in source.searchable_fields()}
                 if "email" not in field_names:
                     continue
                 visit_key = (source.name, "email", parsed.normalized)
-                if visit_key in visited:
-                    continue
-                visited.add(visit_key)
-                tasks.append(source.search(parsed.normalized, "email"))
-
+                if visit_key not in visited:
+                    visited.add(visit_key)
+                    tasks.append(source.search(parsed.normalized, "email"))
             elif parsed.search_type == SearchType.TEXT:
-                # Query each source against fields that opt into free-text search.
                 # Fields with text_searchable=False (e.g. github_username) are only
                 # reachable via resolvers or explicit field-qualified queries.
                 for field_def in source.searchable_fields():
                     if not field_def.text_searchable:
                         continue
                     visit_key = (source.name, field_def.name, parsed.normalized)
-                    if visit_key in visited:
-                        continue
-                    visited.add(visit_key)
-                    tasks.append(source.search(parsed.normalized, field_def.name))
+                    if visit_key not in visited:
+                        visited.add(visit_key)
+                        tasks.append(source.search(parsed.normalized, field_def.name))
+        return tasks
 
-        if not tasks:
-            return _FanOutResult(keys=[], metadata=[])
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
+    def _collect_fan_out_results(
+        self,
+        results: list[Any],
+    ) -> _FanOutResult:
+        """Flatten asyncio.gather results into a _FanOutResult."""
         keys: list[SourceKey] = []
         metadata: list[SourceMetadata] = []
-
         for result in results:
             if isinstance(result, Exception):
                 logger.warning("Source query failed: %s", result)
-                continue
-            if result is None:
-                continue
-            if isinstance(result, SearchResult):
+            elif isinstance(result, SearchResult):
                 keys.extend(result.keys)
                 metadata.extend(result.metadata_only)
             elif isinstance(result, SourceKey):
                 keys.append(result)
-
         return _FanOutResult(keys=keys, metadata=metadata)
 
     def _collect_resolver_queries(
