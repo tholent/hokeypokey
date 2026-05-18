@@ -1,6 +1,7 @@
 """HKP endpoint routes as a Quart Blueprint.
 
 Implements the HTTP Keyserver Protocol (HKP) read-only endpoints:
+  GET  /             — human-readable status/info page
   GET  /pks/lookup   — key retrieval and search
   POST /pks/add      — always returns 403 (read-only server)
 
@@ -13,6 +14,7 @@ import logging
 
 from quart import Blueprint, current_app, request
 
+from hokeypokey import __version__
 from hokeypokey.hkp.formatter import format_get_response, format_index_response
 from hokeypokey.search import parse_search
 
@@ -23,13 +25,80 @@ hkp_bp = Blueprint("hkp", __name__)
 # Operations we understand
 _KNOWN_OPS = {"get", "index", "vindex"}
 
-# CORS header required on all machine-readable responses (Gallagher draft)
+# Content-Type for plain-text error responses
+_PLAIN = "text/plain; charset=utf-8"
+
+# CORS header required on all responses (Gallagher HKP draft)
 _CORS_HEADERS = {"Access-Control-Allow-Origin": "*"}
+
+# Combined headers for plain-text error responses
+_ERR_HEADERS = {**_CORS_HEADERS, "Content-Type": _PLAIN}
 
 
 def _orchestrator():
     """Retrieve the SearchOrchestrator from the current app's extensions."""
     return current_app.extensions["orchestrator"]
+
+
+# ---------------------------------------------------------------------------
+# GET /  — human-readable landing page
+# ---------------------------------------------------------------------------
+
+@hkp_bp.route("/", methods=["GET"])
+async def index():
+    """Return a simple HTML status page for browser visitors."""
+    orchestrator = _orchestrator()
+    source_names = list(orchestrator._sources.keys())
+    sources_html = (
+        "<ul>" + "".join(f"<li><code>{s}</code></li>" for s in source_names) + "</ul>"
+        if source_names
+        else "<p><em>No sources configured.</em></p>"
+    )
+
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>hokeypokey keyserver</title>
+  <style>
+    body {{ font-family: monospace; max-width: 720px; margin: 2rem auto; padding: 0 1rem; }}
+    h1 {{ font-size: 1.4rem; }}
+    code {{ background: #f4f4f4; padding: 0.1em 0.3em; border-radius: 3px; }}
+    pre {{ background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }}
+    .ok {{ color: #2a2; font-weight: bold; }}
+  </style>
+</head>
+<body>
+  <h1>hokeypokey <span class="ok">&#x25cf; running</span></h1>
+  <p>Version: <code>{__version__}</code> &mdash; Read-only HKP/HKPS keyserver</p>
+
+  <h2>Configured sources</h2>
+  {sources_html}
+
+  <h2>Usage</h2>
+  <p>Search for a key by email:</p>
+  <pre>gpg --keyserver hkp://localhost:11371 --search-keys user@example.com</pre>
+  <p>Retrieve a key by fingerprint:</p>
+  <pre>gpg --keyserver hkp://localhost:11371 --recv-keys 0xFINGERPRINT</pre>
+  <p>Or query the API directly:</p>
+  <pre>curl "http://localhost:11371/pks/lookup?op=index&amp;search=user@example.com&amp;options=mr"</pre>
+
+  <h2>Endpoints</h2>
+  <table>
+    <tr><th>Method</th><th>Path</th><th>Description</th></tr>
+    <tr><td>GET</td><td><code>/pks/lookup?op=get&amp;search=...</code></td><td>Retrieve ASCII-armored key</td></tr>
+    <tr><td>GET</td><td><code>/pks/lookup?op=index&amp;search=...</code></td><td>Machine-readable key index</td></tr>
+    <tr><td>POST</td><td><code>/pks/add</code></td><td>403 &mdash; read-only server</td></tr>
+  </table>
+
+  <p style="margin-top:2rem; color:#888; font-size:0.85rem;">
+    <a href="https://github.com/wells/hokeypokey">hokeypokey</a> &mdash; Apache 2.0
+  </p>
+</body>
+</html>
+"""
+    return (html, 200, {**_CORS_HEADERS, "Content-Type": "text/html; charset=utf-8"})
 
 
 # ---------------------------------------------------------------------------
@@ -40,35 +109,22 @@ def _orchestrator():
 async def lookup():
     op = request.args.get("op", "").strip().lower()
     search_term = request.args.get("search", "").strip()
-    options = request.args.get("options", "").strip().lower()
 
     # --- Validate required parameters ---
     if not op:
-        return (
-            "Missing required parameter: op",
-            400,
-            _CORS_HEADERS,
-        )
+        return ("Missing required parameter: op", 400, _ERR_HEADERS)
     if not search_term:
-        return (
-            "Missing required parameter: search",
-            400,
-            _CORS_HEADERS,
-        )
+        return ("Missing required parameter: search", 400, _ERR_HEADERS)
 
     # --- Dispatch unknown operations ---
     if op not in _KNOWN_OPS:
-        return (
-            f"Operation not supported: {op!r}",
-            501,
-            _CORS_HEADERS,
-        )
+        return (f"Operation not supported: {op!r}", 501, _ERR_HEADERS)
 
     # --- Parse search term ---
     try:
         parsed = parse_search(search_term)
     except ValueError as exc:
-        return (str(exc), 400, _CORS_HEADERS)
+        return (str(exc), 400, _ERR_HEADERS)
 
     # --- Execute lookup ---
     orchestrator = _orchestrator()
@@ -76,27 +132,19 @@ async def lookup():
         keys = await orchestrator.lookup(parsed)
     except Exception as exc:
         logger.exception("Orchestrator lookup failed: %s", exc)
-        return ("Internal server error", 500, _CORS_HEADERS)
+        return ("Internal server error", 500, _ERR_HEADERS)
 
     if not keys:
-        return ("No keys found", 404, _CORS_HEADERS)
+        return ("No keys found", 404, _ERR_HEADERS)
 
     # --- Format response ---
     if op == "get":
         body = format_get_response(keys)
-        return (
-            body,
-            200,
-            {**_CORS_HEADERS, "Content-Type": "application/pgp-keys"},
-        )
+        return (body, 200, {**_CORS_HEADERS, "Content-Type": "application/pgp-keys"})
 
     # op == "index" or "vindex"
     body = format_index_response(keys)
-    return (
-        body,
-        200,
-        {**_CORS_HEADERS, "Content-Type": "text/plain; charset=utf-8"},
-    )
+    return (body, 200, {**_CORS_HEADERS, "Content-Type": "text/plain; charset=utf-8"})
 
 
 # ---------------------------------------------------------------------------
@@ -108,5 +156,5 @@ async def add():
     return (
         "Keyserver is read-only. Key submission is not supported.",
         403,
-        _CORS_HEADERS,
+        _ERR_HEADERS,
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -32,10 +33,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the bind port from config",
     )
+    parser.add_argument(
+        "--log-level",
+        metavar="LEVEL",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging level (default: INFO)",
+    )
     return parser
 
 
-def run(config_path: Path, host_override: str | None, port_override: int | None) -> None:
+def run(
+    config_path: Path,
+    host_override: str | None,
+    port_override: int | None,
+    log_level: str = "INFO",
+) -> None:
     """Load config, create app, and serve with Hypercorn."""
     import asyncio
 
@@ -44,6 +57,13 @@ def run(config_path: Path, host_override: str | None, port_override: int | None)
 
     from hokeypokey.app import create_app
     from hokeypokey.config import ConfigError, load_config
+
+    # Configure logging before anything else
+    logging.basicConfig(
+        level=getattr(logging, log_level),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
     try:
         config = load_config(config_path)
@@ -67,10 +87,16 @@ def run(config_path: Path, host_override: str | None, port_override: int | None)
         hc.certfile = config.server.tls_cert
         hc.keyfile = config.server.tls_key
 
+    protocol = "hkps" if (config.server.tls_cert and config.server.tls_key) else "hkp"
+    logging.getLogger(__name__).info(
+        "Starting hokeypokey on %s://%s:%d with %d source(s)",
+        protocol, config.server.host, config.server.port, len(config.sources),
+    )
+
     asyncio.run(hypercorn.asyncio.serve(app, hc))
 
 
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-    run(args.config, args.host, args.port)
+    run(args.config, args.host, args.port, args.log_level)
