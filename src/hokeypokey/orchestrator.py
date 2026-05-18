@@ -7,7 +7,14 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from hokeypokey.models import ParsedSearch, SearchResult, SearchType, SourceKey, SourceMetadata
+from hokeypokey.models import (
+    ParsedSearch,
+    ResolvedQuery,
+    SearchResult,
+    SearchType,
+    SourceKey,
+    SourceMetadata,
+)
 
 if TYPE_CHECKING:
     from hokeypokey.cache import KeyCache
@@ -15,15 +22,6 @@ if TYPE_CHECKING:
     from hokeypokey.sources.base import KeySource
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class _ResolverQuery:
-    """A cross-source query produced by a resolver, ready to execute."""
-
-    target_source: str
-    search_field: str
-    search_value: str
 
 
 @dataclass
@@ -207,7 +205,7 @@ class SearchOrchestrator:
 
     async def _run_resolver_query(
         self,
-        rq: _ResolverQuery,
+        rq: ResolvedQuery,
         depth: int,
         visited: set[tuple[str, str, str]],
         collected_fps: set[str],
@@ -232,13 +230,9 @@ class SearchOrchestrator:
             logger.warning("Resolver source query failed for %s/%s: %s", rq.target_source, rq.search_field, exc)
             return
 
-        # Normalize result — sources may return list[SourceKey] or SearchResult
         if isinstance(result, SearchResult):
             keys = result.keys
             extra_metadata = result.metadata_only
-        elif isinstance(result, list):
-            keys = result
-            extra_metadata = []
         else:
             keys = []
             extra_metadata = []
@@ -363,8 +357,6 @@ class SearchOrchestrator:
             if isinstance(result, SearchResult):
                 keys.extend(result.keys)
                 metadata.extend(result.metadata_only)
-            elif isinstance(result, list):
-                keys.extend(result)
             elif isinstance(result, SourceKey):
                 keys.append(result)
 
@@ -375,7 +367,7 @@ class SearchOrchestrator:
         keys: list[SourceKey],
         visited: set[tuple[str, str, str]],
         extra_metadata: list[SourceMetadata] | None = None,
-    ) -> list[_ResolverQuery]:
+    ) -> list[ResolvedQuery]:
         """Evaluate all resolvers against *keys* and *extra_metadata*.
 
         Resolvers fire on metadata from two sources:
@@ -384,7 +376,7 @@ class SearchOrchestrator:
            matched the query but had no PGP key.  These can still trigger
            resolvers (the whole point of cross-source resolution).
         """
-        new_queries: list[_ResolverQuery] = []
+        new_queries: list[ResolvedQuery] = []
 
         # Build a unified list of (metadata_dict, source_name) tuples
         metadata_items: list[tuple[dict[str, str], str]] = [
@@ -407,7 +399,7 @@ class SearchOrchestrator:
                         continue
                     visited.add(visit_key)
                     new_queries.append(
-                        _ResolverQuery(
+                        ResolvedQuery(
                             target_source=resolved_query.target_source,
                             search_field=resolved_query.search_field,
                             search_value=resolved_query.search_value,

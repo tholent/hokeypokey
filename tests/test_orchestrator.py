@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from hokeypokey.cache import KeyCache
 from hokeypokey.config import ResolverConfig
-from hokeypokey.models import FieldDefinition, ParsedSearch, SearchType, SourceKey
+from hokeypokey.models import FieldDefinition, SearchResult, SourceKey
 from hokeypokey.orchestrator import SearchOrchestrator
 from hokeypokey.resolver import ConfigResolver
 from hokeypokey.search import parse_search
 from hokeypokey.sources.base import KeySource
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -61,7 +60,7 @@ def make_mock_source(
     source.searchable_fields.return_value = [
         FieldDefinition(name=f, source_attribute=f) for f in (fields or ["email"])
     ]
-    source.search = AsyncMock(return_value=search_result or [])
+    source.search = AsyncMock(return_value=SearchResult(keys=search_result or []))
     source.fetch_by_fingerprint = AsyncMock(return_value=fetch_result)
     source.check_freshness = AsyncMock(return_value=freshness_result)
     return source

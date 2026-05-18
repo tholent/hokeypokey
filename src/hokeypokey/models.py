@@ -75,21 +75,19 @@ class CachedKey:
     """A ``SourceKey`` stored in the key cache with TTL bookkeeping.
 
     Attributes:
-        source_key:      The underlying key and its metadata.
-        cached_at:       Unix timestamp of when the key was last fetched/validated.
-        ttl:             Seconds before the cached entry should be revalidated.
-        freshness_token: Copied from ``source_key.freshness_token`` for convenience;
-                         updated in-place when a freshness check confirms the key is
-                         still current without a full refetch.
+        source_key:  The underlying key and its metadata.
+        cached_at:   Unix timestamp of when the key was last fetched/validated.
+        ttl:         Seconds before the cached entry should be revalidated.
     """
 
     source_key: SourceKey
     cached_at: float
     ttl: float
-    freshness_token: str = field(init=False)
 
-    def __post_init__(self) -> None:
-        self.freshness_token = self.source_key.freshness_token
+    @property
+    def freshness_token(self) -> str:
+        """Delegated to source_key — single source of truth for the freshness token."""
+        return self.source_key.freshness_token
 
     @property
     def is_fresh(self) -> bool:
