@@ -9,7 +9,6 @@ import pytest
 
 from hokeypokey.config import AppConfig, ConfigError, load_config, parse_duration
 
-
 # ---------------------------------------------------------------------------
 # parse_duration
 # ---------------------------------------------------------------------------
@@ -43,6 +42,22 @@ def test_parse_duration_invalid():
 def test_parse_duration_empty():
     with pytest.raises(ConfigError):
         parse_duration("")
+
+
+def test_parse_duration_days():
+    assert parse_duration("1d") == 86400
+
+
+def test_parse_duration_days_plural():
+    assert parse_duration("7d") == 604800
+
+
+def test_parse_duration_days_and_hours():
+    assert parse_duration("1d12h") == 129600
+
+
+def test_parse_duration_days_hours_minutes():
+    assert parse_duration("2d6h30m") == 196200
 
 
 # ---------------------------------------------------------------------------

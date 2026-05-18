@@ -31,32 +31,34 @@ class ConfigError(Exception):
 # ---------------------------------------------------------------------------
 
 _DURATION_RE = re.compile(
-    r"^(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?$"
+    r"^(?:(?P<days>\d+)d)?(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?$"
 )
 
 
 def parse_duration(s: str) -> int:
     """Convert a human-readable duration string to seconds.
 
-    Supported formats: ``"30s"``, ``"5m"``, ``"1h"``, ``"2h30m"``, ``"1h15m30s"``.
+    Supported formats: ``"30s"``, ``"5m"``, ``"1h"``, ``"2h30m"``, ``"1h15m30s"``,
+    ``"1d"``, ``"7d"``, ``"1d12h"``.
 
     Raises:
         ConfigError: if the string cannot be parsed or evaluates to zero.
     """
     s = s.strip()
     if not s:
-        raise ConfigError(f"Empty duration string")
+        raise ConfigError("Empty duration string")
 
     m = _DURATION_RE.match(s)
-    if not m or not any(m.group(g) for g in ("hours", "minutes", "seconds")):
+    if not m or not any(m.group(g) for g in ("days", "hours", "minutes", "seconds")):
         raise ConfigError(
-            f"Invalid duration {s!r}. Use combinations of h/m/s, e.g. '5m', '1h30m', '90s'."
+            f"Invalid duration {s!r}. Expected d/h/m/s, e.g. '5m', '1h30m', '7d', '1d12h'."
         )
 
+    days = int(m.group("days") or 0)
     hours = int(m.group("hours") or 0)
     minutes = int(m.group("minutes") or 0)
     seconds = int(m.group("seconds") or 0)
-    total = hours * 3600 + minutes * 60 + seconds
+    total = days * 86400 + hours * 3600 + minutes * 60 + seconds
 
     if total <= 0:
         raise ConfigError(f"Duration {s!r} must be greater than zero.")
