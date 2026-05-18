@@ -336,8 +336,8 @@ class GitHubSource(KeySource):
     @staticmethod
     def _extract_primary_email(gh_emails: list[dict[str, Any]]) -> str:
         """Return the best email from a GitHub emails list (verified takes precedence)."""
-        verified = [e["email"] for e in gh_emails if e.get("verified")]
+        verified: list[str] = [e["email"] for e in gh_emails if e.get("verified")]
         if verified:
             return verified[0]
-        all_emails = [e["email"] for e in gh_emails]
+        all_emails: list[str] = [e["email"] for e in gh_emails]
         return all_emails[0] if all_emails else ""

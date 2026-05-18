@@ -70,7 +70,7 @@ def _parse_uid_info(uid: object, key_created_ts: int) -> _UIDInfo:
     uid_flags = ""
 
     try:
-        selfsig = uid.selfsig  # type: ignore[union-attr]
+        selfsig = uid.selfsig  # type: ignore[attr-defined]
         if selfsig is not None:
             if selfsig.creation:
                 uid_created_ts = int(selfsig.creation.timestamp())
