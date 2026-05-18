@@ -208,3 +208,44 @@ async def test_cors_header_on_501():
     async with app.test_client() as client:
         resp = await client.get("/pks/lookup?op=frobnicate&search=x")
     assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+# ---------------------------------------------------------------------------
+# GET /  — landing page
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_landing_page_escapes_source_names():
+    """Source names containing HTML special chars must be escaped in the landing page."""
+    xss_name = "<script>alert(1)</script>"
+    app = Quart(__name__)
+    app.register_blueprint(hkp_bp)
+
+    mock_orchestrator = MagicMock()
+    mock_orchestrator._sources = {xss_name: MagicMock()}
+    app.extensions = {"orchestrator": mock_orchestrator}
+
+    async with app.test_client() as client:
+        resp = await client.get("/")
+
+    assert resp.status_code == 200
+    body = await resp.get_data(as_text=True)
+    # Raw script tag must NOT appear
+    assert "<script>alert(1)</script>" not in body
+    # Escaped form must appear
+    assert "&lt;script&gt;" in body
+
+
+@pytest.mark.asyncio
+async def test_landing_page_returns_200():
+    """GET / returns 200 with HTML content-type."""
+    app = make_test_app()
+    # Patch orchestrator to expose _sources
+    app.extensions["orchestrator"]._sources = {"my-source": MagicMock()}
+
+    async with app.test_client() as client:
+        resp = await client.get("/")
+
+    assert resp.status_code == 200
+    assert "text/html" in resp.content_type

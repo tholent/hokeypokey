@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 _FRESHNESS_SEP = "|||"
 _DEFAULT_API_BASE = "https://api.github.com"
+
+# GitHub username rules: alphanumeric and hyphens, no leading/trailing hyphen,
+# 1–39 characters.  See https://docs.github.com/en/github/creating-cloning-and-archiving-repositories/about-repositories
+_GITHUB_USERNAME_RE = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$")
 
 
 class GitHubSource(KeySource):
@@ -133,6 +138,13 @@ class GitHubSource(KeySource):
         if not username or not etag:
             return False
 
+        if not self._validate_username(username):
+            logger.debug(
+                "GitHub source %r: invalid username %r in freshness token, assuming fresh",
+                self.name, username,
+            )
+            return True  # assume fresh — don't make a request with a bad username
+
         try:
             resp = await self._client.get(
                 f"/users/{username}/gpg_keys",
@@ -161,6 +173,16 @@ class GitHubSource(KeySource):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _validate_username(self, username: str) -> bool:
+        """Return True if *username* matches GitHub's username rules.
+
+        Validates against the pattern ``^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$``
+        and enforces the 39-character maximum length.  This is a defense-in-depth
+        guard; ``httpx`` already URL-encodes path segments, but we reject obviously
+        invalid values before making any network request.
+        """
+        return bool(_GITHUB_USERNAME_RE.match(username)) and len(username) <= 39
+
     def _is_rate_limited(self, resp: httpx.Response) -> bool:
         """Return True if the response indicates a rate limit hit."""
         if resp.status_code == 429:
@@ -175,6 +197,12 @@ class GitHubSource(KeySource):
 
     async def _fetch_keys_for_username(self, username: str) -> list[SourceKey]:
         """Fetch all GPG keys for a specific GitHub username."""
+        if not self._validate_username(username):
+            logger.debug(
+                "GitHub source %r: rejecting invalid username %r", self.name, username
+            )
+            return []
+
         try:
             resp = await self._client.get(f"/users/{username}/gpg_keys")
         except Exception as exc:

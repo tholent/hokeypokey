@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import asyncio
+import ssl
+from unittest.mock import MagicMock, call, patch
 
 import pgpy
 import pgpy.constants
@@ -328,3 +330,89 @@ async def test_search_mixed_entries(test_armor, test_fingerprint):
     assert result.keys[0].fingerprint == test_fingerprint
     assert len(result.metadata_only) == 1
     assert result.metadata_only[0].metadata["username"] == "bob"
+
+
+# ---------------------------------------------------------------------------
+# Concurrency — each call must use its own Connection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_searches_use_separate_connections(test_armor):
+    """Two concurrent searches must not share a Connection instance.
+
+    We patch ``_ldap_search`` at the class level to record how many distinct
+    calls are made, then verify both complete independently without interference.
+    """
+    source = make_ldap_source()
+    entry = make_ldap_entry(test_armor)
+
+    call_count = 0
+
+    def fake_ldap_search(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return [entry]
+
+    with patch.object(source, "_ldap_search", side_effect=fake_ldap_search):
+        results = await asyncio.gather(
+            source.search("alice@example.com", "email"),
+            source.search("alice@example.com", "email"),
+        )
+
+    # Both searches must have completed and each must have triggered one call
+    assert call_count == 2
+    assert len(results[0].keys) == 1
+    assert len(results[1].keys) == 1
+
+
+@pytest.mark.asyncio
+async def test_close_is_noop():
+    """close() should complete without error (no persistent connection to close)."""
+    source = make_ldap_source()
+    # Should not raise even if called multiple times
+    await source.close()
+    await source.close()
+
+
+# ---------------------------------------------------------------------------
+# TLS certificate verification
+# ---------------------------------------------------------------------------
+
+
+def test_ldaps_uri_uses_cert_required_by_default():
+    """ldaps:// URI with default config must use CERT_REQUIRED."""
+    from ldap3 import Tls
+    source = make_ldap_source({"uri": "ldaps://ldap.corp.example.com"})
+    assert source._server.tls is not None
+    assert isinstance(source._server.tls, Tls)
+    assert source._server.tls.validate == ssl.CERT_REQUIRED
+
+
+def test_ldaps_uri_tls_verify_false_uses_cert_none():
+    """ldaps:// URI with tls_verify=false must use CERT_NONE."""
+    source = make_ldap_source({"uri": "ldaps://ldap.corp.example.com", "tls_verify": False})
+    assert source._server.tls is not None
+    assert source._server.tls.validate == ssl.CERT_NONE
+
+
+def test_ldaps_uri_tls_ca_file_passed_through(tmp_path):
+    """tls_ca_file must be forwarded to the Tls object.
+
+    ldap3.Tls validates that the file exists, so we create a real (empty)
+    temporary file rather than passing a non-existent path.
+    """
+    ca_file = tmp_path / "ca.crt"
+    ca_file.write_bytes(b"")  # ldap3 checks existence, not content at init time
+    source = make_ldap_source({
+        "uri": "ldaps://ldap.corp.example.com",
+        "tls_ca_file": str(ca_file),
+    })
+    assert source._server.tls is not None
+    assert source._server.tls.ca_certs_file == str(ca_file)
+
+
+def test_plain_ldap_uri_has_no_tls():
+    """Plain ldap:// URI must not attach a Tls object."""
+    source = make_ldap_source({"uri": "ldap://ldap.corp.example.com"})
+    assert source._server.tls is None

@@ -273,3 +273,66 @@ async def test_search_unknown_field_returns_empty():
     results = await source.search("value", "nonexistent_field")
     await source.close()
     assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Username validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_invalid_username_returns_empty_no_request(httpx_mock: HTTPXMock):
+    """An invalid username must be rejected before any HTTP request is made."""
+    source = make_github_source()
+    results = await source.search("../evil", "github_username")
+    await source.close()
+    assert results == []
+    # httpx_mock would raise if any request was made
+
+
+@pytest.mark.asyncio
+async def test_search_leading_hyphen_rejected(httpx_mock: HTTPXMock):
+    source = make_github_source()
+    results = await source.search("-badname", "github_username")
+    await source.close()
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_search_trailing_hyphen_rejected(httpx_mock: HTTPXMock):
+    source = make_github_source()
+    results = await source.search("badname-", "github_username")
+    await source.close()
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_search_too_long_username_rejected(httpx_mock: HTTPXMock):
+    source = make_github_source()
+    results = await source.search("a" * 40, "github_username")
+    await source.close()
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_search_single_char_username_valid(httpx_mock: HTTPXMock, test_armor, test_fingerprint):
+    """A single-character username is valid per GitHub rules."""
+    source = make_github_source()
+    httpx_mock.add_response(
+        url="https://api.github.com/users/a/gpg_keys",
+        json=[make_gpg_key_response(test_armor, "a")],
+        headers={"ETag": '"abc"'},
+    )
+    results = await source.search("a", "github_username")
+    await source.close()
+    assert len(results) == 1
+
+
+@pytest.mark.asyncio
+async def test_check_freshness_invalid_username_in_token_returns_true():
+    """Invalid username in freshness token → assume fresh, no HTTP request."""
+    source = make_github_source()
+    token = f"../evil{_FRESHNESS_SEP}\"etag\""
+    result = await source.check_freshness("AABBCC", token)
+    await source.close()
+    assert result is True

@@ -33,6 +33,11 @@ backend = "memory"
 # Individual sources can override this with their own ttl setting.
 default_ttl = "10m"
 
+# Maximum number of keys to hold in the cache at once (optional).
+# When the limit is reached, the least-recently-used key is evicted.
+# Omit or set to 0 to allow unlimited growth (suitable for small deployments).
+# max_size = 10000
+
 # ---------------------------------------------------------------------------
 # [[sources]] — Key sources (one block per source)
 #
@@ -80,6 +85,14 @@ search_filter = "(pgpKey=*)"
 # Optional: LDAP attribute that stores the key fingerprint.
 # If set, enables fetch-by-fingerprint lookups directly from LDAP.
 # fingerprint_attribute = "pgpCertID"
+
+# TLS certificate verification for ldaps:// connections (default: true).
+# Set to false only for self-signed certificates in development/test environments.
+# tls_verify = true
+
+# Path to a custom CA bundle file (optional).
+# Use this if your LDAP server uses a certificate signed by an internal CA.
+# tls_ca_file = "/etc/ssl/certs/internal-ca.crt"
 
 # Field mappings: logical field name → LDAP attribute name.
 # These define what fields are searchable and how they map to LDAP attributes.

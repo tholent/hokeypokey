@@ -12,6 +12,7 @@ from hokeypokey.hkp.routes import hkp_bp
 from hokeypokey.orchestrator import SearchOrchestrator
 from hokeypokey.resolver import ConfigResolver
 from hokeypokey.sources import get_source_class
+from hokeypokey.sources.base import KeySource
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +32,10 @@ def create_app(config: AppConfig) -> Quart:
     app = Quart(__name__)
 
     # ---- Cache ----
-    cache = KeyCache()
+    cache = KeyCache(max_size=config.cache.max_size)
 
     # ---- Source plugins ----
-    sources: dict[str, object] = {}
+    sources: dict[str, KeySource] = {}
     for src_cfg in config.sources:
         source_class = get_source_class(src_cfg.type)
         ttl = src_cfg.ttl if src_cfg.ttl is not None else config.cache.default_ttl
@@ -61,7 +62,7 @@ def create_app(config: AppConfig) -> Quart:
 
     # ---- Orchestrator ----
     orchestrator = SearchOrchestrator(
-        sources=sources,  # type: ignore[arg-type]
+        sources=sources,
         cache=cache,
         resolvers=resolvers,
     )
@@ -78,9 +79,9 @@ def create_app(config: AppConfig) -> Quart:
         """Close all source connections on server shutdown."""
         for source in sources.values():
             try:
-                await source.close()  # type: ignore[attr-defined]
-                logger.info("Closed source %r", source.name)  # type: ignore[attr-defined]
+                await source.close()
+                logger.info("Closed source %r", source.name)
             except Exception as exc:
-                logger.warning("Error closing source %r: %s", source.name, exc)  # type: ignore[attr-defined]
+                logger.warning("Error closing source %r: %s", source.name, exc)
 
     return app

@@ -307,3 +307,92 @@ def test_len():
     assert len(cache) == 2
     cache.remove(FP)
     assert len(cache) == 1
+
+
+# ---------------------------------------------------------------------------
+# LRU eviction
+# ---------------------------------------------------------------------------
+
+FP3 = "AABBCCEE" * 5
+FP4 = "AABBCCFF" * 5
+
+
+def test_lru_eviction_removes_oldest():
+    """When max_size is reached, the oldest (LRU) entry is evicted."""
+    cache = KeyCache(max_size=3)
+    cache.put(make_key(FP, email="a@example.com"), ttl=300)
+    cache.put(make_key(FP2, email="b@example.com"), ttl=300)
+    cache.put(make_key(FP3, email="c@example.com"), ttl=300)
+    assert len(cache) == 3
+
+    # Adding a 4th entry must evict FP (the oldest)
+    cache.put(make_key(FP4, email="d@example.com"), ttl=300)
+    assert len(cache) == 3
+    assert cache.get_by_fingerprint(FP) is None   # evicted
+    assert cache.get_by_fingerprint(FP2) is not None
+    assert cache.get_by_fingerprint(FP3) is not None
+    assert cache.get_by_fingerprint(FP4) is not None
+
+
+def test_lru_access_refreshes_order():
+    """Accessing an entry via get_by_fingerprint should protect it from eviction."""
+    cache = KeyCache(max_size=3)
+    cache.put(make_key(FP, email="a@example.com"), ttl=300)
+    cache.put(make_key(FP2, email="b@example.com"), ttl=300)
+    cache.put(make_key(FP3, email="c@example.com"), ttl=300)
+
+    # Access FP — it becomes the most recently used, so FP2 is now the LRU
+    cache.get_by_fingerprint(FP)
+
+    # Adding FP4 must evict FP2 (now the LRU), not FP
+    cache.put(make_key(FP4, email="d@example.com"), ttl=300)
+    assert len(cache) == 3
+    assert cache.get_by_fingerprint(FP) is not None   # protected by access
+    assert cache.get_by_fingerprint(FP2) is None      # evicted
+    assert cache.get_by_fingerprint(FP3) is not None
+    assert cache.get_by_fingerprint(FP4) is not None
+
+
+def test_lru_eviction_cleans_indexes():
+    """Evicted entries must be removed from all secondary indexes."""
+    cache = KeyCache(max_size=2)
+    cache.put(make_key(FP, email="a@example.com", github_username="alice"), ttl=300)
+    cache.put(make_key(FP2, email="b@example.com"), ttl=300)
+
+    # Evict FP by adding FP3
+    cache.put(make_key(FP3, email="c@example.com"), ttl=300)
+
+    # Email index must be clean
+    assert cache.search("a@example.com", "email") == []
+    # Custom field index must be clean
+    assert cache.search("alice", "github_username") == []
+    # Key ID indexes must be clean
+    assert cache.get_by_key_id(FP[-16:]) == []
+    assert cache.get_by_key_id(FP[-8:]) == []
+
+
+def test_lru_max_size_none_does_not_evict():
+    """Default (max_size=None) must never evict regardless of how many keys are added."""
+    cache = KeyCache()  # max_size=None
+    fps = [f"{'ABCDEF01' * 4}{i:02X}{i:02X}" for i in range(20)]
+    for fp in fps:
+        cache.put(make_key(fp, email=f"user{fp[:4]}@example.com"), ttl=300)
+    assert len(cache) == 20
+    for fp in fps:
+        assert cache.get_by_fingerprint(fp) is not None
+
+
+def test_lru_search_refreshes_order():
+    """Accessing an entry via search() should also protect it from eviction."""
+    cache = KeyCache(max_size=3)
+    cache.put(make_key(FP, email="a@example.com"), ttl=300)
+    cache.put(make_key(FP2, email="b@example.com"), ttl=300)
+    cache.put(make_key(FP3, email="c@example.com"), ttl=300)
+
+    # Access FP via search — it becomes most recently used
+    cache.search("a@example.com", "email")
+
+    # Adding FP4 must evict FP2 (now the LRU), not FP
+    cache.put(make_key(FP4, email="d@example.com"), ttl=300)
+    assert cache.get_by_fingerprint(FP) is not None   # protected
+    assert cache.get_by_fingerprint(FP2) is None      # evicted

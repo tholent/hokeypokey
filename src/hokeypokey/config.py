@@ -81,6 +81,7 @@ class ServerConfig:
 class CacheConfig:
     backend: Literal["memory"] = "memory"
     default_ttl: int = 600  # 10 minutes
+    max_size: int | None = None  # None = unlimited; set to enable LRU eviction
 
 
 @dataclass
@@ -136,6 +137,11 @@ def _parse_cache(raw: dict[str, Any]) -> CacheConfig:
         cfg.backend = backend  # type: ignore[assignment]
     if "default_ttl" in raw:
         cfg.default_ttl = parse_duration(str(raw["default_ttl"]))
+    if "max_size" in raw:
+        max_size = int(raw["max_size"])
+        if max_size <= 0:
+            raise ConfigError(f"cache.max_size must be a positive integer, got {max_size}.")
+        cfg.max_size = max_size
     return cfg
 
 

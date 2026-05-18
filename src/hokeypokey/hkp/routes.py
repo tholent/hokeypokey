@@ -10,6 +10,7 @@ Reference: draft-shaw-openpgp-hkp-00 / draft-gallagher-openpgp-hkp-09
 
 from __future__ import annotations
 
+import html
 import logging
 
 from quart import Blueprint, current_app, request
@@ -50,12 +51,12 @@ async def index():
     orchestrator = _orchestrator()
     source_names = list(orchestrator._sources.keys())
     sources_html = (
-        "<ul>" + "".join(f"<li><code>{s}</code></li>" for s in source_names) + "</ul>"
+        "<ul>" + "".join(f"<li><code>{html.escape(s)}</code></li>" for s in source_names) + "</ul>"
         if source_names
         else "<p><em>No sources configured.</em></p>"
     )
 
-    html = f"""<!doctype html>
+    page_html = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -98,7 +99,7 @@ async def index():
 </body>
 </html>
 """
-    return (html, 200, {**_CORS_HEADERS, "Content-Type": "text/html; charset=utf-8"})
+    return (page_html, 200, {**_CORS_HEADERS, "Content-Type": "text/html; charset=utf-8"})
 
 
 # ---------------------------------------------------------------------------

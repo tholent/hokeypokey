@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import ssl
 from typing import Any
 
 import pgpy
-from ldap3 import ALL_ATTRIBUTES, BASE, Connection, Server, SUBTREE
+from ldap3 import BASE, Connection, Server, SUBTREE, Tls
 from ldap3.utils.conv import escape_filter_chars
 
 from hokeypokey.models import FieldDefinition, SearchResult, SourceKey, SourceMetadata
@@ -36,10 +37,23 @@ class LDAPSource(KeySource):
                         (default: ``(pgpKey=*)``)
     ``fingerprint_attribute`` LDAP attribute for fingerprint-based lookup
                         (optional; enables ``fetch_by_fingerprint``)
+    ``tls_verify``      Validate the server's TLS certificate (default: ``true``).
+                        Set to ``false`` only for self-signed certs in dev/test.
+    ``tls_ca_file``     Path to a CA bundle file for custom certificate authorities
+                        (optional; uses the system CA bundle by default).
     ``fields``          Mapping of logical field name → LDAP attribute name
     ==================  ============================================================
 
     Freshness token format: ``"<entry_dn>|||<modifyTimestamp>"``
+
+    Thread safety
+    -------------
+    ``_ldap_search()`` is called via ``asyncio.to_thread()``, which means multiple
+    concurrent requests will execute it in separate threads.  To avoid sharing a
+    single ``ldap3.Connection`` across threads (which is not thread-safe), a fresh
+    ``Connection`` is created for every ``_ldap_search()`` call and unbound in a
+    ``finally`` block.  The ``ldap3.Server`` object is created once in ``__init__``
+    and shared — it is stateless and safe to reuse across threads.
     """
 
     def __init__(self, name: str, priority: int, ttl: int, config: dict[str, Any]) -> None:
@@ -61,8 +75,18 @@ class LDAPSource(KeySource):
         # Field mapping: logical name → LDAP attribute
         self._fields: dict[str, str] = dict(config.get("fields", {}))
 
-        # Lazy connection — created on first use
-        self._conn: Connection | None = None
+        # TLS configuration — applied when the URI scheme is ldaps://.
+        # Plain ldap:// URIs do not use TLS and ignore these settings.
+        tls_config: Tls | None = None
+        if self._uri.lower().startswith("ldaps://"):
+            tls_verify: bool = bool(config.get("tls_verify", True))
+            tls_ca_file: str | None = config.get("tls_ca_file")
+            validate = ssl.CERT_REQUIRED if tls_verify else ssl.CERT_NONE
+            tls_config = Tls(validate=validate, ca_certs_file=tls_ca_file)
+
+        # Shared, stateless Server object — safe to reuse across threads.
+        # Connection objects are created per-call in _ldap_search().
+        self._server = Server(self._uri, tls=tls_config)
 
     # ------------------------------------------------------------------
     # KeySource interface
@@ -186,30 +210,11 @@ class LDAPSource(KeySource):
         return current_timestamp == old_timestamp
 
     async def close(self) -> None:
-        """Unbind and close the LDAP connection."""
-        if self._conn is not None:
-            try:
-                await asyncio.to_thread(self._conn.unbind)
-            except Exception:
-                pass
-            self._conn = None
+        """No-op: connections are created per-call and unbound immediately after use."""
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _get_connection(self) -> Connection:
-        """Return a live LDAP connection, reconnecting if necessary."""
-        if self._conn is None or not self._conn.bound:
-            server = Server(self._uri)
-            self._conn = Connection(
-                server,
-                user=self._bind_dn,
-                password=self._bind_password,
-                auto_bind=True,
-                read_only=True,
-            )
-        return self._conn
 
     def _ldap_search(
         self,
@@ -220,27 +225,41 @@ class LDAPSource(KeySource):
     ) -> list[dict[str, Any]]:
         """Execute a synchronous LDAP search and return a list of attribute dicts.
 
-        This method is intended to be called via ``asyncio.to_thread()``.
+        This method is intended to be called via ``asyncio.to_thread()``.  A new
+        ``Connection`` is created for each call so that concurrent invocations in
+        separate threads never share mutable connection state.
         """
-        conn = self._get_connection()
-        conn.search(
-            search_base=base,
-            search_filter=search_filter,
-            search_scope=scope,
-            attributes=attributes,
+        conn = Connection(
+            self._server,
+            user=self._bind_dn,
+            password=self._bind_password,
+            auto_bind=True,
+            read_only=True,
         )
-        results = []
-        for entry in conn.entries:
-            row: dict[str, Any] = {"_dn": entry.entry_dn}
-            for attr in attributes:
-                try:
-                    val = getattr(entry, attr)
-                    # ldap3 attribute values are wrapped objects; .value gives the raw value
-                    row[attr] = val.value if val else None
-                except Exception:
-                    row[attr] = None
-            results.append(row)
-        return results
+        try:
+            conn.search(
+                search_base=base,
+                search_filter=search_filter,
+                search_scope=scope,
+                attributes=attributes,
+            )
+            results = []
+            for entry in conn.entries:
+                row: dict[str, Any] = {"_dn": entry.entry_dn}
+                for attr in attributes:
+                    try:
+                        val = getattr(entry, attr)
+                        # ldap3 attribute values are wrapped objects; .value gives the raw value
+                        row[attr] = val.value if val else None
+                    except Exception:
+                        row[attr] = None
+                results.append(row)
+            return results
+        finally:
+            try:
+                conn.unbind()
+            except Exception:
+                pass
 
     def _extract_metadata(self, entry: dict[str, Any]) -> dict[str, str]:
         """Extract metadata from an LDAP entry using the configured field mappings."""

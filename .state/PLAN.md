@@ -497,32 +497,182 @@ Depends on Wave 6 (fully assembled application).
 
 ---
 
+## Wave 9 — Audit Remediation
+
+Source: `.state/OVERVIEW.md` § Audit Findings (2026-03-17). All tasks address confirmed findings.
+
+### Task 9.1 — Fix LDAP connection race condition (HIGH)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/sources/ldap.py`
+  - `tests/test_source_ldap.py`
+- **Problem:** `_get_connection()` returns a single shared `ldap3.Connection`. Multiple concurrent `asyncio.to_thread(self._ldap_search, ...)` calls share this connection. `ldap3.Connection` is not thread-safe — `conn.entries` is mutated by each `search()` call, so interleaved calls corrupt results.
+- **Fix — create a fresh connection per `_ldap_search()` call:**
+  1. Remove the `self._conn` instance variable and the `_get_connection()` method entirely.
+  2. Store connection parameters as instance state instead: `self._server_uri`, `self._bind_dn`, `self._bind_password` (already stored).
+  3. In `_ldap_search()`, create a new `Server` + `Connection` at the top of the method, use it for the search, extract results into the `list[dict]` return value, then `conn.unbind()` in a `finally` block. Since `_ldap_search` runs in a thread via `asyncio.to_thread()`, each concurrent call gets its own connection — no shared mutable state.
+  4. Update `close()` to be a no-op (or remove the connection teardown logic), since there is no longer a persistent connection to close.
+  5. Create the `Server` object once in `__init__` and store as `self._server` — `ldap3.Server` is stateless and thread-safe, so it can be shared. Only `Connection` must be per-call.
+- **Test additions in `tests/test_source_ldap.py`:**
+  - Add a test that verifies concurrent searches do not share a connection: call `search()` twice concurrently via `asyncio.gather()`, mock `Connection` to record instance identity, assert two distinct `Connection` instances were created.
+  - Verify existing tests still pass (they mock `Connection` — update mocks if constructor call site changed).
+- **Verification:** `uv run pytest tests/test_source_ldap.py -v` — all pass, including new concurrency test.
+
+### Task 9.2 — Add LRU eviction to KeyCache (MEDIUM)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/cache.py`
+  - `src/hokeypokey/config.py`
+  - `src/hokeypokey/app.py`
+  - `hokeypokey.example.toml`
+  - `tests/test_cache.py`
+- **Problem:** `KeyCache` has no maximum size and no eviction. Memory grows without bound under sustained diverse queries.
+- **Fix — add `max_size` parameter with LRU eviction:**
+  1. Add `max_size: int | None = None` parameter to `KeyCache.__init__()`. `None` means unlimited (backward-compatible default).
+  2. Track access order: change `self._store` from `dict[str, CachedKey]` to `collections.OrderedDict[str, CachedKey]`. On every `get_by_fingerprint()`, `get_by_key_id()`, and `search()` hit, call `self._store.move_to_end(fp)` to mark the entry as recently used.
+  3. In `put()`, after inserting the new entry, if `self._max_size is not None and len(self._store) > self._max_size`: pop the **oldest** entry (`self._store.popitem(last=False)`) and call `self._deindex_key()` on it to clean up all secondary indexes.
+  4. Add `max_size: int | None` field to `CacheConfig` dataclass in `config.py` (default `None`). Parse from TOML `[cache]` section key `max_size` as an integer.
+  5. Pass `max_size` from `CacheConfig` to `KeyCache()` in `create_app()` in `app.py`.
+  6. Add `max_size` to `hokeypokey.example.toml` with a comment: `# max_size = 10000  # Maximum number of cached keys (optional; omit for unlimited)`.
+- **Test additions in `tests/test_cache.py`:**
+  - Test eviction: create `KeyCache(max_size=3)`, put 4 keys, assert `len(cache) == 3` and the first key inserted is gone.
+  - Test LRU ordering: create `KeyCache(max_size=3)`, put keys A, B, C, access A via `get_by_fingerprint`, put key D → B is evicted (least recently used), A is retained.
+  - Test eviction cleans indexes: after eviction, `search()` and `get_by_key_id()` for the evicted key return empty.
+  - Test `max_size=None` (default) does not evict.
+- **Verification:** `uv run pytest tests/test_cache.py -v` — all pass, including new eviction tests.
+
+### Task 9.3 — Enable LDAP TLS certificate verification (MEDIUM)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/sources/ldap.py`
+  - `hokeypokey.example.toml`
+  - `tests/test_source_ldap.py`
+- **Problem:** `Server(self._uri)` uses `ldap3` defaults which do not validate TLS certificates, even for `ldaps://` URIs.
+- **Fix — default to `CERT_REQUIRED`, make configurable:**
+  1. In `LDAPSource.__init__()`, read optional config keys:
+     - `tls_verify` (bool, default `True`) — whether to validate the server certificate
+     - `tls_ca_file` (str, optional) — path to a CA bundle file for custom CAs
+  2. If the URI scheme is `ldaps://` or if STARTTLS is implied, construct an `ldap3.Tls` object:
+     ```python
+     import ssl
+     from ldap3 import Tls
+     validate = ssl.CERT_REQUIRED if tls_verify else ssl.CERT_NONE
+     tls_config = Tls(validate=validate, ca_certs_file=tls_ca_file)
+     ```
+  3. Pass `tls=tls_config` to `Server(self._uri, tls=tls_config)`.
+  4. Note: after Task 9.1, the `Server` object is created once in `__init__` and stored as `self._server`. The `Tls` config is set on the `Server`, so all connections created from it inherit the TLS settings.
+  5. Update `hokeypokey.example.toml` to document the new config keys:
+     ```toml
+     # TLS certificate verification (default: true). Set to false for self-signed certs.
+     # tls_verify = true
+     # Path to a custom CA bundle file (optional).
+     # tls_ca_file = "/etc/ssl/certs/ca-certificates.crt"
+     ```
+- **Test additions in `tests/test_source_ldap.py`:**
+  - Test that when `tls_verify` is `True` (default) and URI is `ldaps://`, the `Server` is constructed with a `Tls` object where `validate == ssl.CERT_REQUIRED`.
+  - Test that when `tls_verify` is `False`, `validate == ssl.CERT_NONE`.
+  - Test that `tls_ca_file` is passed through to the `Tls` object.
+  - Test that plain `ldap://` URIs do not get a `Tls` object (no TLS on plaintext).
+- **Verification:** `uv run pytest tests/test_source_ldap.py -v` — all pass.
+
+### Task 9.4 — HTML-escape source names in landing page (LOW)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/hkp/routes.py`
+  - `tests/test_hkp_routes.py`
+- **Problem:** Source names from config are interpolated into HTML without escaping. Defense-in-depth fix.
+- **Fix:**
+  1. Add `import html` at the top of `routes.py`.
+  2. In the `index()` route function (line 53), change:
+     ```python
+     "".join(f"<li><code>{s}</code></li>" for s in source_names)
+     ```
+     to:
+     ```python
+     "".join(f"<li><code>{html.escape(s)}</code></li>" for s in source_names)
+     ```
+- **Test additions in `tests/test_hkp_routes.py`:**
+  - Add a test that configures a source with name `<script>alert(1)</script>`, requests `GET /`, and asserts the response body contains `&lt;script&gt;` (escaped) and does NOT contain `<script>alert(1)</script>` (raw).
+- **Verification:** `uv run pytest tests/test_hkp_routes.py -v` — all pass.
+
+### Task 9.5 — Add GitHub username validation guard (LOW)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/sources/github.py`
+  - `tests/test_source_github.py`
+- **Problem:** Usernames are interpolated into API paths without validation. Defense-in-depth fix.
+- **Fix:**
+  1. Add a module-level compiled regex: `_GITHUB_USERNAME_RE = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$")` — matches GitHub's actual username rules (alphanumeric, hyphens, no leading/trailing hyphen, 1-39 chars).
+  2. Add a private validation method:
+     ```python
+     def _validate_username(self, username: str) -> bool:
+         return bool(_GITHUB_USERNAME_RE.match(username)) and len(username) <= 39
+     ```
+  3. In `_fetch_keys_for_username()`, before the HTTP call, check `if not self._validate_username(username): return []` with a debug log.
+  4. In `check_freshness()`, after parsing the username from the token, apply the same validation. Return `True` (assume fresh) if invalid — don't make a request with a bad username.
+- **Test additions in `tests/test_source_github.py`:**
+  - Test that `search("../evil", "github_username")` returns `[]` without making an HTTP request.
+  - Test that `search("valid-user", "github_username")` proceeds normally.
+  - Test that `check_freshness("fp", "../evil|||etag")` returns `True` without making an HTTP request.
+  - Test edge cases: single char `"a"`, max length (39 chars), leading hyphen `"-bad"` → rejected, trailing hyphen `"bad-"` → rejected.
+- **Verification:** `uv run pytest tests/test_source_github.py -v` — all pass.
+
+### Task 9.6 — Fix type annotation in app factory (LOW)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/app.py`
+- **Problem:** `sources: dict[str, object] = {}` should use `KeySource` type.
+- **Fix:**
+  1. Add import: `from hokeypokey.sources.base import KeySource`
+  2. Change line 37 from `sources: dict[str, object] = {}` to `sources: dict[str, KeySource] = {}`
+  3. Remove the `# type: ignore[arg-type]` comment on the `SearchOrchestrator(sources=sources, ...)` call (line 64) since the type now matches.
+  4. Remove the `# type: ignore[attr-defined]` comments on `source.close()` and `source.name` in the shutdown hook (lines 81-84) since `KeySource` defines these.
+- **Verification:** `uv run pytest tests/test_app.py -v` — all pass. No `# type: ignore` comments remain in `app.py`.
+
+### Task 9.7 — Run full test suite and commit
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Depends on:** 9.1, 9.2, 9.3, 9.4, 9.5, 9.6
+- **Actions:**
+  1. Run `uv run pytest -v` — all tests must pass (existing + new).
+  2. Run `uv run ruff check src/ tests/` — no lint errors.
+  3. Verify test count increased (was 166, expect ~180+ with new tests).
+- **Verification:** Clean test run, clean lint, no regressions.
+
+---
+
 ## Parallelization Strategy
 
 ```
-Wave 1: [1.1] [1.2] [1.3]           ← all parallel
-            \    |    /
-Wave 2:     [2.1] [2.2]             ← parallel with each other
-              |     |
-Wave 3:   [3.1] [3.2] [3.3]        ← 3.1 and 3.2 parallel; 3.3 depends on both
-              \    |    /
-Wave 4:     [4.1] [4.2]             ← parallel with each other
-              \    /                    (also parallel with Wave 5)
-Wave 5:   [5.1] [5.2]               ← parallel with each other AND with Wave 4
-              \    /
-Wave 6:     [6.1] [6.2]             ← 6.2 depends on 6.1
-                |
-Wave 7:       [7.1]                  ← depends on Wave 6
-                |
-Wave 8:       [8.1]                  ← depends on Wave 6 (can parallel with Wave 7)
+Waves 1–8: [all complete]
+
+Wave 9 (audit remediation):
+  [9.1] [9.2] [9.3] [9.4] [9.5] [9.6]   ← all 6 parallel (independent files/concerns)
+                  \    |    /
+                   [9.7]                   ← depends on all of 9.1–9.6
 ```
 
-**Maximum parallelism per wave:**
-- Wave 1: 3 tasks
-- Wave 2: 2 tasks
-- Wave 3: 2 tasks (3.1 + 3.2), then 3.3
-- Wave 4 + 5: 4 tasks (4.1, 4.2, 5.1, 5.2 — all in parallel)
-- Wave 6: 2 tasks (sequential)
-- Wave 7 + 8: 2 tasks (parallel)
+**Wave 9 parallelism:** Tasks 9.1–9.6 are fully independent — they touch different files and different concerns:
+- 9.1 modifies `ldap.py` (connection logic) — no overlap with 9.3 (TLS config in `__init__`)? **Caution:** 9.1 and 9.3 both modify `ldap.py` and `test_source_ldap.py`. 9.3 depends on the `Server` object being created in `__init__` (which 9.1 introduces). **Therefore 9.3 depends on 9.1.**
+- 9.2 modifies `cache.py`, `config.py`, `app.py` — independent of all others except 9.6 also modifies `app.py`. **Caution:** 9.2 and 9.6 both modify `app.py`. The changes are to different lines (9.2 adds `max_size` param to `KeyCache()` constructor call; 9.6 changes the type annotation and removes `# type: ignore` comments). **These can be done in either order but not truly in parallel — run 9.6 first (smaller change), then 9.2.**
+- 9.4 modifies `routes.py` — independent of all others.
+- 9.5 modifies `github.py` — independent of all others.
 
-**Critical path:** 1.2 → 2.1 → 3.3 → 4.2 → 6.1 → 6.2 → 8.1
+**Revised parallelization:**
+```
+Wave 9a: [9.1] [9.4] [9.5] [9.6]    ← all parallel
+              \              |
+Wave 9b:     [9.3]        [9.2]      ← 9.3 after 9.1; 9.2 after 9.6
+                \          /
+Wave 9c:       [9.7]                  ← final validation
+```
+
+**Maximum parallelism:** 4 tasks in Wave 9a, 2 in Wave 9b, 1 in Wave 9c.
+
+**Critical path:** 9.1 → 9.3 → 9.7
