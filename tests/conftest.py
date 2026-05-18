@@ -11,7 +11,7 @@ import pytest
 
 from hokeypokey.app import create_app
 from hokeypokey.config import AppConfig, CacheConfig, ResolverConfig, ServerConfig, SourceConfig
-from hokeypokey.models import FieldDefinition, SourceKey
+from hokeypokey.models import FieldDefinition, SearchResult, SourceKey, SourceMetadata
 from hokeypokey.sources.base import KeySource
 
 
@@ -80,18 +80,20 @@ def make_mock_source(
     priority: int,
     ttl: int,
     fields: list[str],
-    search_result: list[SourceKey] | None = None,
+    search_result: list[SourceKey] | SearchResult | None = None,
     fetch_result: SourceKey | None = None,
     freshness_result: bool = True,
+    text_searchable: bool = True,
 ) -> MagicMock:
     source = MagicMock(spec=KeySource)
     source.name = name
     source.priority = priority
     source.ttl = ttl
     source.searchable_fields.return_value = [
-        FieldDefinition(name=f, source_attribute=f) for f in fields
+        FieldDefinition(name=f, source_attribute=f, text_searchable=text_searchable)
+        for f in fields
     ]
-    source.search = AsyncMock(return_value=search_result or [])
+    source.search = AsyncMock(return_value=search_result if search_result is not None else [])
     source.fetch_by_fingerprint = AsyncMock(return_value=fetch_result)
     source.check_freshness = AsyncMock(return_value=freshness_result)
     source.close = AsyncMock()

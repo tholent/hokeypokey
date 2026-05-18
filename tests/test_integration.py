@@ -7,7 +7,7 @@ import time
 import pytest
 
 from hokeypokey.config import ResolverConfig
-from hokeypokey.models import SourceKey
+from hokeypokey.models import SearchResult, SourceKey, SourceMetadata
 from tests.conftest import make_app_with_sources, make_mock_source
 
 
@@ -291,3 +291,139 @@ async def test_missing_search_returns_400():
     async with app.test_client() as client:
         resp = await client.get("/pks/lookup?op=get")
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Scenario 11: Keyless LDAP entry triggers resolver to GitHub
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_keyless_ldap_triggers_resolver_to_github(bob_armor, bob_fingerprint):
+    """LDAP has no PGP key for the user, but has a github_id.
+    The resolver should use that github_id to fetch keys from GitHub.
+    """
+    # LDAP returns metadata-only (no PGP key, but has github_id)
+    ldap_metadata = SourceMetadata(
+        metadata={"username": "wells", "github_id": "wellsiau", "email": "wells@example.com"},
+        source_name="ldap",
+        source_priority=10,
+    )
+    ldap_result = SearchResult(keys=[], metadata_only=[ldap_metadata])
+
+    # GitHub returns a real key for the resolved github username
+    bob_key = make_bob_key(bob_armor, bob_fingerprint)
+
+    ldap = make_mock_source(
+        "ldap", 10, 300, ["email", "username", "github_id"],
+        search_result=ldap_result,
+    )
+    github = make_mock_source(
+        "github", 50, 900, ["github_username"],
+        search_result=[bob_key],
+        text_searchable=False,
+    )
+
+    resolver = ResolverConfig(
+        name="ldap-to-github",
+        trigger_source="ldap",
+        trigger_field="github_id",
+        target_source="github",
+        target_field="github_username",
+    )
+
+    app, _, _ = make_app_with_sources(
+        {"ldap": ldap, "github": github},
+        resolvers=[resolver],
+    )
+    async with app.test_client() as client:
+        resp = await client.get("/pks/lookup?op=index&search=wells&options=mr")
+
+    assert resp.status_code == 200
+    body = await resp.get_data(as_text=True)
+    assert bob_fingerprint in body
+
+    # GitHub was queried via resolver with the LDAP github_id, NOT with "wells"
+    github.search.assert_called_once_with("wellsiau", "github_username")
+
+
+# ---------------------------------------------------------------------------
+# Scenario 12: TEXT search does not fan out to non-text-searchable sources
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_text_search_does_not_fan_out_to_github_directly(bob_armor, bob_fingerprint):
+    """A bare text search like 'wells' must NOT query GitHub directly.
+    GitHub fields are not text-searchable; they should only be reached via resolvers.
+    """
+    # LDAP returns nothing (no match)
+    ldap = make_mock_source("ldap", 10, 300, ["email", "username"], search_result=[])
+    # GitHub should NOT be queried at all
+    github = make_mock_source(
+        "github", 50, 900, ["github_username"],
+        search_result=[],
+        text_searchable=False,
+    )
+
+    app, _, _ = make_app_with_sources({"ldap": ldap, "github": github})
+    async with app.test_client() as client:
+        resp = await client.get("/pks/lookup?op=index&search=wells&options=mr")
+
+    assert resp.status_code == 404
+    # LDAP was queried (it has text-searchable fields)
+    assert ldap.search.call_count >= 1
+    # GitHub was NOT queried (no text-searchable fields)
+    github.search.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Scenario 13: Keyless LDAP + resolver + key from GitHub via email search
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_keyless_ldap_resolver_via_email_search(bob_armor, bob_fingerprint):
+    """Search by email finds LDAP user with no key but with github_id.
+    Resolver fires and finds the key on GitHub.
+    """
+    ldap_metadata = SourceMetadata(
+        metadata={"email": "wells@example.com", "github_id": "wellsiau"},
+        source_name="ldap",
+        source_priority=10,
+    )
+    ldap_result = SearchResult(keys=[], metadata_only=[ldap_metadata])
+
+    bob_key = make_bob_key(bob_armor, bob_fingerprint)
+
+    ldap = make_mock_source(
+        "ldap", 10, 300, ["email", "github_id"],
+        search_result=ldap_result,
+    )
+    github = make_mock_source(
+        "github", 50, 900, ["github_username"],
+        search_result=[bob_key],
+        text_searchable=False,
+    )
+
+    resolver = ResolverConfig(
+        name="ldap-to-github",
+        trigger_source="ldap",
+        trigger_field="github_id",
+        target_source="github",
+        target_field="github_username",
+    )
+
+    app, _, _ = make_app_with_sources(
+        {"ldap": ldap, "github": github},
+        resolvers=[resolver],
+    )
+    async with app.test_client() as client:
+        resp = await client.get(
+            "/pks/lookup?op=get&search=wells@example.com&options=mr"
+        )
+
+    assert resp.status_code == 200
+    body = await resp.get_data(as_text=True)
+    assert "BEGIN PGP PUBLIC KEY BLOCK" in body
+    github.search.assert_called_once_with("wellsiau", "github_username")

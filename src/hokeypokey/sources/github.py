@@ -82,7 +82,14 @@ class GitHubSource(KeySource):
 
     def searchable_fields(self) -> list[FieldDefinition]:
         return [
-            FieldDefinition(name=logical, source_attribute=gh_field, searchable=True)
+            FieldDefinition(
+                name=logical,
+                source_attribute=gh_field,
+                searchable=True,
+                # GitHub fields should not participate in unqualified TEXT searches.
+                # They should only be reached via resolvers or explicit field queries.
+                text_searchable=False,
+            )
             for logical, gh_field in self._fields.items()
         ]
 

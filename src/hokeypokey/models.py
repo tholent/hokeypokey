@@ -33,11 +33,18 @@ class FieldDefinition:
     ``name`` is the logical field name used throughout hokeypokey (e.g. ``"email"``).
     ``source_attribute`` is the source-specific attribute name (e.g. ``"mail"`` in LDAP).
     ``searchable`` controls whether the field is included in the search index.
+    ``text_searchable`` controls whether the field participates in unqualified
+    TEXT searches (e.g. searching for ``"wells"`` without specifying a field).
+    Fields like ``email`` and ``username`` are text-searchable because a bare
+    text query could plausibly match them.  Fields like ``github_username`` are
+    NOT text-searchable because they should only be reached via resolvers or
+    explicit field-qualified searches.
     """
 
     name: str
     source_attribute: str
     searchable: bool = True
+    text_searchable: bool = True
 
 
 @dataclass
@@ -92,6 +99,39 @@ class CachedKey:
     def touch(self) -> None:
         """Reset the TTL clock without changing the key data (used after a successful freshness check)."""
         self.cached_at = time.time()
+
+
+@dataclass
+class SourceMetadata:
+    """Metadata from a source entry that has no PGP key but may trigger resolvers.
+
+    This represents an LDAP entry (or similar) that was found by the search query
+    and contains useful metadata (e.g. a ``github_id``), but does not contain a
+    PGP key itself.  The orchestrator uses this to fire cross-source resolvers.
+
+    Attributes:
+        metadata:        Arbitrary key/value metadata from the source
+                         (e.g. ``{"github_id": "octocat", "email": "alice@example.com"}``).
+        source_name:     Name of the source that produced this metadata.
+        source_priority: Numeric priority of the source.
+    """
+
+    metadata: dict[str, str]
+    source_name: str
+    source_priority: int
+
+
+@dataclass
+class SearchResult:
+    """Combined result from a source search: keys found + metadata-only entries.
+
+    A source may find LDAP entries that match the query but have no PGP key.
+    Those entries still carry metadata (e.g. ``github_id``) that can trigger
+    cross-source resolvers.  This dataclass bundles both kinds of results.
+    """
+
+    keys: list[SourceKey] = field(default_factory=list)
+    metadata_only: list[SourceMetadata] = field(default_factory=list)
 
 
 @dataclass

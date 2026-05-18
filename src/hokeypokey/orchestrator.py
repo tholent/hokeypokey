@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from hokeypokey.models import ParsedSearch, SearchType, SourceKey
+from hokeypokey.models import ParsedSearch, SearchResult, SearchType, SourceKey, SourceMetadata
 
 if TYPE_CHECKING:
     from hokeypokey.cache import KeyCache
@@ -24,6 +24,14 @@ class _ResolverQuery:
     target_source: str
     search_field: str
     search_value: str
+
+
+@dataclass
+class _FanOutResult:
+    """Keys and metadata collected from a fan-out across sources."""
+
+    keys: list[SourceKey]
+    metadata: list[SourceMetadata]
 
 
 class SearchOrchestrator:
@@ -159,8 +167,11 @@ class SearchOrchestrator:
 
         # ---- 3. Cache miss — fan out to sources ----
         # Only fan out if we didn't get anything from cache for this query
+        new_metadata: list[SourceMetadata] = []
         if not fresh_fps and not stale_entries:
-            new_keys = await self._fan_out(parsed, visited)
+            fan_out_result = await self._fan_out(parsed, visited)
+            new_keys = fan_out_result.keys
+            new_metadata = fan_out_result.metadata
             for key in new_keys:
                 source = self._sources.get(key.source_name)
                 ttl = source.ttl if source is not None else 600
@@ -173,14 +184,19 @@ class SearchOrchestrator:
         if depth <= 0:
             return
 
-        # Collect all metadata from newly fetched keys + fresh cache hits
+        # Collect all metadata from:
+        # a) newly fetched keys (have PGP data + metadata)
+        # b) fresh cache hits (have PGP data + metadata)
+        # c) metadata-only results (no PGP key, but have resolver-triggering fields)
         all_keys_for_resolvers: list[SourceKey] = list(new_keys)
         for fp in fresh_fps:
             entry = self._cache.get_by_fingerprint(fp)
             if entry is not None:
                 all_keys_for_resolvers.append(entry.source_key)
 
-        resolver_queries = self._collect_resolver_queries(all_keys_for_resolvers, visited)
+        resolver_queries = self._collect_resolver_queries(
+            all_keys_for_resolvers, visited, extra_metadata=new_metadata,
+        )
 
         if resolver_queries:
             resolver_tasks = [
@@ -211,17 +227,28 @@ class SearchOrchestrator:
             return
 
         try:
-            keys = await source.search(rq.search_value, rq.search_field)
+            result = await source.search(rq.search_value, rq.search_field)
         except Exception as exc:
             logger.warning("Resolver source query failed for %s/%s: %s", rq.target_source, rq.search_field, exc)
             return
+
+        # Normalize result — sources may return list[SourceKey] or SearchResult
+        if isinstance(result, SearchResult):
+            keys = result.keys
+            extra_metadata = result.metadata_only
+        elif isinstance(result, list):
+            keys = result
+            extra_metadata = []
+        else:
+            keys = []
+            extra_metadata = []
 
         for key in keys:
             self._cache.put(key, ttl=source.ttl)
             collected_fps.add(key.fingerprint)
 
         # Run further resolvers on the results (depth - 1)
-        further_queries = self._collect_resolver_queries(keys, visited)
+        further_queries = self._collect_resolver_queries(keys, visited, extra_metadata=extra_metadata)
         if further_queries:
             tasks = [
                 self._run_resolver_query(fq, depth=depth - 1, visited=visited, collected_fps=collected_fps)
@@ -244,12 +271,14 @@ class SearchOrchestrator:
             return self._cache.search(parsed.normalized, "email")
 
         if parsed.search_type == SearchType.TEXT:
-            # Text search: check all custom field indexes
+            # Text search: check cache indexes for text-searchable fields only
             results: list[CachedKey] = []
             seen: set[str] = set()
             for source in self._sources.values():
                 for field_def in source.searchable_fields():
                     if field_def.name == "email":
+                        continue
+                    if not field_def.text_searchable:
                         continue
                     for entry in self._cache.search(parsed.normalized, field_def.name):
                         if entry.source_key.fingerprint not in seen:
@@ -273,11 +302,15 @@ class SearchOrchestrator:
         self,
         parsed: ParsedSearch,
         visited: set[tuple[str, str, str]],
-    ) -> list[SourceKey]:
-        """Query all relevant sources concurrently for *parsed*."""
+    ) -> _FanOutResult:
+        """Query all relevant sources concurrently for *parsed*.
+
+        Returns both keys (with PGP data) and metadata-only entries
+        (e.g. LDAP entries that match but have no PGP key).
+        """
         if parsed.search_type in (SearchType.LONG_KEY_ID, SearchType.SHORT_KEY_ID):
             # Key ID lookups are cache-only; sources don't index by key ID
-            return []
+            return _FanOutResult(keys=[], metadata=[])
 
         tasks = []
 
@@ -301,8 +334,12 @@ class SearchOrchestrator:
                 tasks.append(source.search(parsed.normalized, "email"))
 
             elif parsed.search_type == SearchType.TEXT:
-                # Query each source against each of its searchable fields
+                # Query each source against fields that opt into free-text search.
+                # Fields with text_searchable=False (e.g. github_username) are only
+                # reachable via resolvers or explicit field-qualified queries.
                 for field_def in source.searchable_fields():
+                    if not field_def.text_searchable:
+                        continue
                     visit_key = (source.name, field_def.name, parsed.normalized)
                     if visit_key in visited:
                         continue
@@ -310,37 +347,57 @@ class SearchOrchestrator:
                     tasks.append(source.search(parsed.normalized, field_def.name))
 
         if not tasks:
-            return []
+            return _FanOutResult(keys=[], metadata=[])
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         keys: list[SourceKey] = []
+        metadata: list[SourceMetadata] = []
+
         for result in results:
             if isinstance(result, Exception):
                 logger.warning("Source query failed: %s", result)
                 continue
             if result is None:
                 continue
-            if isinstance(result, list):
+            if isinstance(result, SearchResult):
+                keys.extend(result.keys)
+                metadata.extend(result.metadata_only)
+            elif isinstance(result, list):
                 keys.extend(result)
-            else:
+            elif isinstance(result, SourceKey):
                 keys.append(result)
 
-        return keys
+        return _FanOutResult(keys=keys, metadata=metadata)
 
     def _collect_resolver_queries(
         self,
         keys: list[SourceKey],
         visited: set[tuple[str, str, str]],
+        extra_metadata: list[SourceMetadata] | None = None,
     ) -> list[_ResolverQuery]:
-        """Evaluate all resolvers against *keys* and return resolver queries to execute."""
+        """Evaluate all resolvers against *keys* and *extra_metadata*.
+
+        Resolvers fire on metadata from two sources:
+        1. Keys with PGP data (``keys``) — their ``.metadata`` dict is checked.
+        2. Metadata-only entries (``extra_metadata``) — e.g. LDAP entries that
+           matched the query but had no PGP key.  These can still trigger
+           resolvers (the whole point of cross-source resolution).
+        """
         new_queries: list[_ResolverQuery] = []
 
-        for key in keys:
+        # Build a unified list of (metadata_dict, source_name) tuples
+        metadata_items: list[tuple[dict[str, str], str]] = [
+            (key.metadata, key.source_name) for key in keys
+        ]
+        for meta in (extra_metadata or []):
+            metadata_items.append((meta.metadata, meta.source_name))
+
+        for metadata, source_name in metadata_items:
             for resolver in self._resolvers:
-                if not resolver.can_resolve(key.metadata, key.source_name):
+                if not resolver.can_resolve(metadata, source_name):
                     continue
-                for resolved_query in resolver.resolve(key.metadata):
+                for resolved_query in resolver.resolve(metadata):
                     visit_key = (
                         resolved_query.target_source,
                         resolved_query.search_field,

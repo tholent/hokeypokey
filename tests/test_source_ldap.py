@@ -95,36 +95,45 @@ async def test_search_constructs_correct_filter(test_armor, test_fingerprint):
     entry = make_ldap_entry(test_armor)
 
     with patch.object(source, "_ldap_search", return_value=[entry]) as mock_search:
-        results = await source.search("alice@example.com", "email")
+        result = await source.search("alice@example.com", "email")
 
-    # Verify the filter was constructed correctly
+    # Verify the filter was constructed correctly — searches by field only,
+    # NOT combined with base_filter, so keyless entries are also found.
     call_args = mock_search.call_args
     search_filter = call_args[0][2]  # positional arg: base, scope, filter, attrs
     assert "mail=alice@example.com" in search_filter
-    assert search_filter.startswith("(&")
 
-    assert len(results) == 1
-    assert results[0].fingerprint == test_fingerprint
-    assert results[0].metadata["email"] == "alice@example.com"
-    assert results[0].metadata["username"] == "alice"
-    assert results[0].metadata["github_id"] == "octocat"
-    assert results[0].source_name == "test-ldap"
-    assert results[0].source_priority == 10
+    # Result is a SearchResult with keys and metadata_only
+    from hokeypokey.models import SearchResult
+    assert isinstance(result, SearchResult)
+    assert len(result.keys) == 1
+    assert result.keys[0].fingerprint == test_fingerprint
+    assert result.keys[0].metadata["email"] == "alice@example.com"
+    assert result.keys[0].metadata["username"] == "alice"
+    assert result.keys[0].metadata["github_id"] == "octocat"
+    assert result.keys[0].source_name == "test-ldap"
+    assert result.keys[0].source_priority == 10
 
 
 @pytest.mark.asyncio
 async def test_search_unknown_field_returns_empty():
+    from hokeypokey.models import SearchResult
     source = make_ldap_source()
-    results = await source.search("alice@example.com", "nonexistent_field")
-    assert results == []
+    result = await source.search("alice@example.com", "nonexistent_field")
+    assert isinstance(result, SearchResult)
+    assert result.keys == []
+    assert result.metadata_only == []
 
 
 @pytest.mark.asyncio
 async def test_search_ldap_error_returns_empty():
+    from hokeypokey.models import SearchResult
     source = make_ldap_source()
     with patch.object(source, "_ldap_search", side_effect=Exception("connection refused")):
-        results = await source.search("alice@example.com", "email")
-    assert results == []
+        result = await source.search("alice@example.com", "email")
+    assert isinstance(result, SearchResult)
+    assert result.keys == []
+    assert result.metadata_only == []
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +169,10 @@ async def test_search_freshness_token_format(test_armor, test_fingerprint):
     entry = make_ldap_entry(test_armor, dn=dn, modify_ts=ts)
 
     with patch.object(source, "_ldap_search", return_value=[entry]):
-        results = await source.search("alice@example.com", "email")
+        result = await source.search("alice@example.com", "email")
 
-    assert len(results) == 1
-    token = results[0].freshness_token
+    assert len(result.keys) == 1
+    token = result.keys[0].freshness_token
     assert _FRESHNESS_SEP in token
     token_dn, token_ts = token.split(_FRESHNESS_SEP, 1)
     assert token_dn == dn
@@ -259,3 +268,63 @@ async def test_fetch_by_fingerprint_with_config(test_armor, test_fingerprint):
 
     assert result is not None
     assert result.fingerprint == test_fingerprint
+
+
+# ---------------------------------------------------------------------------
+# Keyless LDAP entries produce metadata-only results
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_keyless_entry_produces_metadata():
+    """An LDAP entry with no pgpKey but with metadata should produce a SourceMetadata."""
+    from hokeypokey.models import SearchResult
+    source = make_ldap_source()
+
+    # Entry has no pgpKey but has all the other fields
+    keyless_entry = {
+        "_dn": "uid=wells,ou=people,dc=example,dc=com",
+        "pgpKey": None,
+        "mail": "wells@example.com",
+        "uid": "wells",
+        "githubUsername": "wellsiau",
+        "modifyTimestamp": "20240101000000Z",
+    }
+
+    with patch.object(source, "_ldap_search", return_value=[keyless_entry]):
+        result = await source.search("wells", "username")
+
+    assert isinstance(result, SearchResult)
+    assert result.keys == []  # no PGP key → no SourceKey
+    assert len(result.metadata_only) == 1
+    meta = result.metadata_only[0]
+    assert meta.metadata["email"] == "wells@example.com"
+    assert meta.metadata["username"] == "wells"
+    assert meta.metadata["github_id"] == "wellsiau"
+    assert meta.source_name == "test-ldap"
+
+
+@pytest.mark.asyncio
+async def test_search_mixed_entries(test_armor, test_fingerprint):
+    """Search returns both a keyed entry and a keyless entry."""
+    from hokeypokey.models import SearchResult
+    source = make_ldap_source()
+
+    keyed_entry = make_ldap_entry(test_armor, dn="uid=alice,ou=people,dc=example,dc=com")
+    keyless_entry = {
+        "_dn": "uid=bob,ou=people,dc=example,dc=com",
+        "pgpKey": None,
+        "mail": "bob@example.com",
+        "uid": "bob",
+        "githubUsername": "bobdev",
+        "modifyTimestamp": "20240101000000Z",
+    }
+
+    with patch.object(source, "_ldap_search", return_value=[keyed_entry, keyless_entry]):
+        result = await source.search("example.com", "email")
+
+    assert isinstance(result, SearchResult)
+    assert len(result.keys) == 1
+    assert result.keys[0].fingerprint == test_fingerprint
+    assert len(result.metadata_only) == 1
+    assert result.metadata_only[0].metadata["username"] == "bob"

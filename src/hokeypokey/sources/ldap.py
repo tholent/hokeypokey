@@ -11,7 +11,7 @@ import pgpy
 from ldap3 import ALL_ATTRIBUTES, BASE, Connection, Server, SUBTREE
 from ldap3.utils.conv import escape_filter_chars
 
-from hokeypokey.models import FieldDefinition, SourceKey
+from hokeypokey.models import FieldDefinition, SearchResult, SourceKey, SourceMetadata
 from hokeypokey.sources.base import KeySource
 
 logger = logging.getLogger(__name__)
@@ -74,20 +74,28 @@ class LDAPSource(KeySource):
             for logical, ldap_attr in self._fields.items()
         ]
 
-    async def search(self, query: str, field: str = "email") -> list[SourceKey]:
+    async def search(self, query: str, field: str = "email") -> list[SourceKey] | SearchResult:
         """Search LDAP for entries matching *query* in *field*.
 
         Constructs a compound LDAP filter combining the base filter with a
         field-specific equality assertion.  The query value is escaped to
         prevent LDAP filter injection.
+
+        Returns a :class:`~hokeypokey.models.SearchResult` containing both
+        keys (entries with PGP key data) and metadata-only entries (entries
+        that matched the query but had no PGP key).  The metadata-only entries
+        can still trigger cross-source resolvers.
         """
         ldap_attr = self._fields.get(field)
         if ldap_attr is None:
             logger.debug("LDAP source %r has no mapping for field %r", self.name, field)
-            return []
+            return SearchResult()
 
         escaped_query = escape_filter_chars(query)
-        search_filter = f"(&{self._base_filter}({ldap_attr}={escaped_query}))"
+        # Search for entries matching the field, regardless of whether they have a PGP key.
+        # We drop the base_filter (which typically requires pgpKey=*) so that entries
+        # WITHOUT a PGP key are still found — their metadata can trigger resolvers.
+        search_filter = f"({ldap_attr}={escaped_query})"
 
         attrs_to_fetch = (
             [self._key_attribute]
@@ -101,9 +109,9 @@ class LDAPSource(KeySource):
             )
         except Exception as exc:
             logger.warning("LDAP search failed for source %r: %s", self.name, exc)
-            return []
+            return SearchResult()
 
-        return self._entries_to_source_keys(entries)
+        return self._entries_to_search_result(entries)
 
     async def fetch_by_fingerprint(self, fingerprint: str) -> SourceKey | None:
         """Fetch a key by fingerprint, if the LDAP schema supports it."""
@@ -127,8 +135,8 @@ class LDAPSource(KeySource):
             logger.warning("LDAP fingerprint fetch failed for source %r: %s", self.name, exc)
             return None
 
-        keys = self._entries_to_source_keys(entries)
-        return keys[0] if keys else None
+        search_result = self._entries_to_search_result(entries)
+        return search_result.keys[0] if search_result.keys else None
 
     async def check_freshness(self, fingerprint: str, token: str) -> bool:
         """Check whether the LDAP entry's modifyTimestamp has changed.
@@ -214,58 +222,86 @@ class LDAPSource(KeySource):
             results.append(row)
         return results
 
-    def _entries_to_source_keys(self, entries: list[dict[str, Any]]) -> list[SourceKey]:
-        """Convert raw LDAP entry dicts to :class:`SourceKey` objects."""
-        keys: list[SourceKey] = []
+    def _extract_metadata(self, entry: dict[str, Any]) -> dict[str, str]:
+        """Extract metadata from an LDAP entry using the configured field mappings."""
+        metadata: dict[str, str] = {}
+        for logical_name, ldap_attr in self._fields.items():
+            val = entry.get(ldap_attr)
+            if isinstance(val, list):
+                val = val[0] if val else None
+            if val is not None:
+                metadata[logical_name] = str(val)
+        return metadata
+
+    def _entries_to_search_result(self, entries: list[dict[str, Any]]) -> SearchResult:
+        """Convert raw LDAP entry dicts to a :class:`SearchResult`.
+
+        Entries with a PGP key become :class:`SourceKey` objects.
+        Entries without a PGP key (but with metadata) become
+        :class:`SourceMetadata` objects — these can still trigger resolvers.
+        """
+        result = SearchResult()
+
         for entry in entries:
+            metadata = self._extract_metadata(entry)
+
             raw_key = entry.get(self._key_attribute)
-            if not raw_key:
-                continue
 
             # Handle list values (multi-valued attributes)
             if isinstance(raw_key, list):
                 raw_key = raw_key[0] if raw_key else None
-            if not raw_key:
-                continue
 
-            # Ensure it's a string
+            # Ensure it's a string if present
             if isinstance(raw_key, bytes):
                 try:
                     raw_key = raw_key.decode("utf-8")
                 except Exception:
+                    raw_key = None
+
+            if raw_key:
+                # Entry has a PGP key — try to parse it
+                try:
+                    pgp_key, _ = pgpy.PGPKey.from_blob(raw_key)
+                    fingerprint = str(pgp_key.fingerprint).replace(" ", "").upper()
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to parse PGP key from LDAP entry %r: %s",
+                        entry.get("_dn"), exc,
+                    )
+                    # Key is unparseable — treat as metadata-only
+                    if metadata:
+                        result.metadata_only.append(SourceMetadata(
+                            metadata=metadata,
+                            source_name=self.name,
+                            source_priority=self.priority,
+                        ))
                     continue
 
-            # Parse the key to get the fingerprint
-            try:
-                pgp_key, _ = pgpy.PGPKey.from_blob(raw_key)
-                fingerprint = str(pgp_key.fingerprint).replace(" ", "").upper()
-            except Exception as exc:
-                logger.warning("Failed to parse PGP key from LDAP entry %r: %s", entry.get("_dn"), exc)
-                continue
+                # Build freshness token
+                dn = entry.get("_dn", "")
+                modify_ts = entry.get("modifyTimestamp") or ""
+                if isinstance(modify_ts, list):
+                    modify_ts = modify_ts[0] if modify_ts else ""
+                freshness_token = f"{dn}{_FRESHNESS_SEP}{modify_ts}"
 
-            # Build metadata from configured field mappings
-            metadata: dict[str, str] = {}
-            for logical_name, ldap_attr in self._fields.items():
-                val = entry.get(ldap_attr)
-                if isinstance(val, list):
-                    val = val[0] if val else None
-                if val is not None:
-                    metadata[logical_name] = str(val)
+                result.keys.append(SourceKey(
+                    fingerprint=fingerprint,
+                    key_armor=raw_key,
+                    metadata=metadata,
+                    freshness_token=freshness_token,
+                    source_name=self.name,
+                    source_priority=self.priority,
+                ))
+            elif metadata:
+                # No PGP key, but has metadata — can still trigger resolvers
+                logger.debug(
+                    "LDAP entry %r has no PGP key but has metadata: %s",
+                    entry.get("_dn"), list(metadata.keys()),
+                )
+                result.metadata_only.append(SourceMetadata(
+                    metadata=metadata,
+                    source_name=self.name,
+                    source_priority=self.priority,
+                ))
 
-            # Build freshness token: "<dn>|||<modifyTimestamp>"
-            dn = entry.get("_dn", "")
-            modify_ts = entry.get("modifyTimestamp") or ""
-            if isinstance(modify_ts, list):
-                modify_ts = modify_ts[0] if modify_ts else ""
-            freshness_token = f"{dn}{_FRESHNESS_SEP}{modify_ts}"
-
-            keys.append(SourceKey(
-                fingerprint=fingerprint,
-                key_armor=raw_key,
-                metadata=metadata,
-                freshness_token=freshness_token,
-                source_name=self.name,
-                source_priority=self.priority,
-            ))
-
-        return keys
+        return result

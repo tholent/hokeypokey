@@ -18,6 +18,7 @@ When the same fingerprint appears in multiple sources, the source with the lowes
 - **Cross-source search resolvers** — declarative TOML configuration bridges sources; when a result from one source contains metadata that maps to another source, the resolver automatically triggers a follow-up query
 - **Priority-ranked sources** — each source instance carries a numeric priority; lower number = more authoritative; same fingerprint from multiple sources → lower priority number wins
 - **Flexible search** — keys are searchable by email, key ID, fingerprint, and custom indexed fields (configurable per source)
+- **Dotenv support** — automatically loads `.env` files for credentials; no need to `export` in your shell
 - **Read-only** — no key submission endpoint; keys are added only through upstream sources
 - **CORS headers on all responses** — `Access-Control-Allow-Origin: *` for browser-based clients
 - **Deployable via `uv` or Docker** — modern Python packaging with Docker image and Compose support
@@ -90,13 +91,14 @@ docker run -v ./hokeypokey.toml:/etc/hokeypokey/hokeypokey.toml:ro \
 ```bash
 # Copy the example config and edit it
 cp hokeypokey.example.toml hokeypokey.toml
-# Edit hokeypokey.toml to configure your sources
+# edit hokeypokey.toml
 
-# Set credentials in environment variables
-export LDAP_BIND_PASSWORD=your_password
-export GITHUB_TOKEN=ghp_your_token
+# Create a .env file for credentials
+cat > .env <<EOF
+LDAP_BIND_PASSWORD=your_password
+GITHUB_TOKEN=ghp_your_token
+EOF
 
-# Start the server
 docker compose up
 ```
 
@@ -192,18 +194,27 @@ Durations are specified as strings with combinations of hours, minutes, and seco
 
 ### Credentials
 
-**Important:** Credentials are **never** stored in the configuration file. Always use environment variables:
+**Important:** Credentials are **never** stored in the configuration file. Hokeypokey uses `python-dotenv` to automatically load credentials from a `.env` file in the current directory.
+
+Create a `.env` file with your credentials:
+
+```bash
+LDAP_BIND_PASSWORD=your_password
+GITHUB_TOKEN=ghp_your_token
+```
+
+Hokeypokey will automatically load this file when it starts. The `.env` file is already in `.gitignore` to prevent accidental commits.
+
+To use a custom `.env` file path, use the `--env-file` flag:
+
+```bash
+hokeypokey --config hokeypokey.toml --env-file /path/to/custom.env
+```
+
+In your TOML configuration, reference these environment variables:
 
 - LDAP bind password: `bind_password_env = "LDAP_BIND_PASSWORD"`
 - GitHub token: `token_env = "GITHUB_TOKEN"`
-
-Set these in your shell or `.env` file before running hokeypokey:
-
-```bash
-export LDAP_BIND_PASSWORD=your_password
-export GITHUB_TOKEN=ghp_your_token
-hokeypokey --config hokeypokey.toml
-```
 
 ## Usage with GPG
 
@@ -244,6 +255,7 @@ Hokeypokey implements the read-only portion of the HKP specification. All respon
 
 | Method | Path | Parameters | Description |
 |--------|------|-----------|-------------|
+| GET | `/` | — | HTML status page (browser-friendly) |
 | GET | `/pks/lookup` | `op=get&search=...` | Retrieve ASCII-armored key(s) |
 | GET | `/pks/lookup` | `op=index&search=...` | Machine-readable key index |
 | GET | `/pks/lookup` | `op=vindex&search=...` | Verbose key index (same as index) |
@@ -277,6 +289,18 @@ info:1:1
 pub:<keyid>:<algo>:<keylen>:<creationdate>:<expirationdate>:<flags>
 uid:<uidhash>:<creationdate>:<expirationdate>:<flags>:<uid>
 ```
+
+## CLI Reference
+
+hokeypokey [--config PATH] [--host HOST] [--port PORT] [--env-file PATH] [--log-level LEVEL]
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config PATH` | `hokeypokey.toml` | Path to the TOML configuration file |
+| `--host HOST` | from config | Override the bind host |
+| `--port PORT` | from config | Override the bind port |
+| `--env-file PATH` | `.env` (auto) | Path to a `.env` file for credentials |
+| `--log-level LEVEL` | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 
 ## Writing a Custom Source Plugin
 
@@ -444,6 +468,9 @@ cd hokeypokey
 
 # Install dependencies (including dev tools)
 uv sync --extra dev
+
+# Run the server locally
+uv run hokeypokey --config hokeypokey.example.toml
 
 # Run tests
 uv run pytest
