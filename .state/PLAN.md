@@ -647,6 +647,233 @@ Source: `.state/OVERVIEW.md` § Audit Findings (2026-03-17). All tasks address c
 
 ---
 
+## Wave 10 — Audit Backlog Remediation
+
+Source: `analysis/comprehensive_audit_20260317.md`. All remaining findings not addressed in Wave 9.
+Tasks 10.1–10.7 are independent and can run in parallel. Task 10.8 is the final gate.
+
+### Task 10.1 — Log warning when GitHub token is missing (MEDIUM-2)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/sources/github.py`
+  - `tests/test_source_github.py`
+- **Problem:** If `token_env` is configured but the environment variable is absent, the source silently falls back to unauthenticated requests (60 req/hour), with no indication of the problem.
+- **Fix:**
+  1. In `GitHubSource.__init__()`, after `token = os.environ.get(token_env)` (line 65), add:
+     ```python
+     if not token:
+         logger.warning(
+             "GitHub source %r: environment variable %r is not set. "
+             "Unauthenticated requests are limited to 60/hour.",
+             name, token_env,
+         )
+     ```
+  2. Keep the existing behaviour (unauthenticated client is still created) — this is a warning, not a hard failure.
+- **Test additions in `tests/test_source_github.py`:**
+  - Add a test that constructs `GitHubSource` with `token_env` pointing to an unset env var and asserts the warning is logged (use `caplog` fixture with `propagate=True`).
+  - Add a test that constructs `GitHubSource` with a set env var and asserts no warning is logged.
+- **Verification:** `uv run pytest tests/test_source_github.py -v` — all pass.
+
+### Task 10.2 — Sanitize ValueError message in lookup route (MEDIUM-3)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/hkp/routes.py`
+  - `tests/test_hkp_routes.py`
+- **Problem:** `except ValueError as exc: return (str(exc), 400, ...)` returns the raw exception message to clients. The try block currently only wraps `parse_search()`, but the pattern is fragile — a future developer could add code inside the try block and accidentally leak internal error details.
+- **Fix:**
+  1. Restructure the route to make the scope explicit — move `parse_search()` outside the broader orchestrator try/except and give it its own narrow handler:
+     ```python
+     # Parse search term — ValueError means a malformed query, not a server error
+     try:
+         parsed = parse_search(search_term)
+     except ValueError:
+         return ("Invalid search term", 400, _ERR_HEADERS)
+     ```
+     The exception detail is intentionally dropped; the client's malformed input is
+     already echoed back in the 400 context and the message from `parse_search` adds
+     nothing actionable for the caller.
+- **Test additions in `tests/test_hkp_routes.py`:**
+  - Update existing invalid-hex test to verify the 400 body is exactly `"Invalid search term"` (not the raw exception message).
+- **Verification:** `uv run pytest tests/test_hkp_routes.py -v` — all pass.
+
+### Task 10.3 — Memoize source registry (LOW-1)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/sources/__init__.py`
+- **Problem:** The `_REGISTRY` dict inside `get_source_class()` is rebuilt on every call. The lazy-import pattern that avoids circular imports is correct, but the dict construction can be memoized.
+- **Fix:**
+  1. Add a module-level `_REGISTRY: dict[str, type[KeySource]] | None = None`.
+  2. Extract dict construction into a private `_build_registry()` function (keeping the lazy imports inside it to preserve the circular-import protection).
+  3. In `get_source_class()`, lazily populate `_REGISTRY` on first call:
+     ```python
+     _REGISTRY: dict[str, type[KeySource]] | None = None
+
+     def _build_registry() -> dict[str, type[KeySource]]:
+         from hokeypokey.sources.github import GitHubSource
+         from hokeypokey.sources.ldap import LDAPSource
+         return {"ldap": LDAPSource, "github": GitHubSource}
+
+     def get_source_class(type_name: str) -> type[KeySource]:
+         global _REGISTRY
+         if _REGISTRY is None:
+             _REGISTRY = _build_registry()
+         try:
+             return _REGISTRY[type_name]
+         except KeyError:
+             from hokeypokey.config import ConfigError
+             known = ", ".join(sorted(_REGISTRY))
+             raise ConfigError(
+                 f"Unknown source type {type_name!r}. Known types: {known}."
+             ) from None
+     ```
+- **No new tests required** — existing tests exercise `get_source_class()` and will continue to pass. Optionally add a test that calls it twice and asserts `_build_registry` is not called on the second invocation (use `monkeypatch`).
+- **Verification:** `uv run pytest tests/ -v` — no regressions.
+
+### Task 10.4 — Eliminate model duplication: `_ResolverQuery` and `CachedKey.freshness_token` (LOW-2, LOW-3)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/orchestrator.py`
+  - `src/hokeypokey/models.py`
+- **Problems:**
+  - LOW-2: `_ResolverQuery` in `orchestrator.py` (lines 21–26) is structurally identical to `ResolvedQuery` in `models.py`. Two dataclasses with the same fields serving the same purpose.
+  - LOW-3: `CachedKey.freshness_token` (models.py lines 89–92) duplicates `source_key.freshness_token` and is never updated independently, creating two potentially-diverging copies.
+
+**Fix LOW-2 — Remove `_ResolverQuery`, use `ResolvedQuery` throughout:**
+  1. In `orchestrator.py`, add `ResolvedQuery` to the import from `hokeypokey.models`.
+  2. Delete the `_ResolverQuery` dataclass (lines 21–26).
+  3. In `_collect_resolver_queries()`, change the return type annotation and all `_ResolverQuery(...)` instantiations to `ResolvedQuery(...)`.
+  4. Update `_run_resolver_query()` parameter type from `_ResolverQuery` to `ResolvedQuery`.
+  5. The `_FanOutResult` dataclass is distinct (it bundles a different shape of data) — leave it as is.
+
+**Fix LOW-3 — Replace `CachedKey.freshness_token` field with a property:**
+  1. In `models.py`, remove the `freshness_token: str = field(init=False)` field declaration and the `__post_init__` method (or leave `__post_init__` empty if it serves no other purpose after this change).
+  2. Add a `@property`:
+     ```python
+     @property
+     def freshness_token(self) -> str:
+         """Delegated to source_key — single source of truth for the freshness token."""
+         return self.source_key.freshness_token
+     ```
+  3. All existing reads of `entry.freshness_token` (e.g., `orchestrator.py:296`) continue to work via the property. No callers need updating.
+  4. Update the `CachedKey` docstring to remove the claim that `freshness_token` is "updated in-place" (it never was).
+- **Verification:** `uv run pytest -v` — no regressions (no new tests required; the change is a cleanup with identical runtime behaviour).
+
+### Task 10.5 — Add day support to duration parser (LOW-5)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/config.py`
+  - `tests/test_config.py`
+- **Problem:** `parse_duration()` supports `h`, `m`, `s` but not `d`. Cache TTLs of days (e.g., `"7d"`, `"1d12h"`) are a natural use case.
+- **Fix:**
+  1. Update `_DURATION_RE` to include an optional leading days component:
+     ```python
+     _DURATION_RE = re.compile(
+         r"^(?:(?P<days>\d+)d)?(?:(?P<hours>\d+)h)?(?:(?P<minutes>\d+)m)?(?:(?P<seconds>\d+)s)?$"
+     )
+     ```
+  2. In `parse_duration()`, update the `any(m.group(g) ...)` guard to include `"days"`:
+     ```python
+     if not m or not any(m.group(g) for g in ("days", "hours", "minutes", "seconds")):
+     ```
+  3. Add days to the total calculation:
+     ```python
+     days = int(m.group("days") or 0)
+     total = days * 86400 + hours * 3600 + minutes * 60 + seconds
+     ```
+  4. Update the docstring and error message to include `d` in the examples.
+- **Test additions in `tests/test_config.py`:**
+  - `"1d"` → `86400`
+  - `"7d"` → `604800`
+  - `"1d12h"` → `129600`
+  - `"2d6h30m"` → `196200`
+- **Verification:** `uv run pytest tests/test_config.py -v` — all pass.
+
+### Task 10.6 — Standardize `search()` return type to `SearchResult` (LOW-7)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/sources/base.py`
+  - `src/hokeypokey/sources/github.py`
+  - `tests/test_source_github.py`
+- **Problem:** `KeySource.search()` in `base.py` declares `-> list[SourceKey]` but `LDAPSource.search()` returns `SearchResult`. This violates LSP and forces `isinstance` checks in the orchestrator. Standardizing on `SearchResult` is cleaner — it's a strict superset of `list[SourceKey]` (a `SearchResult` with empty `metadata_only` is equivalent).
+- **Fix:**
+  1. In `base.py`, add `SearchResult` to the `TYPE_CHECKING` import block and update the `search()` signature:
+     ```python
+     @abstractmethod
+     async def search(self, query: str, field: str = "email") -> SearchResult:
+     ```
+  2. In `github.py`, add `SearchResult` to the import from `hokeypokey.models`. Wrap all `return []` and `return all_keys` / `return keys` statements in `search()` and its helpers that feed into `search()`:
+     - In `search()`: return `SearchResult(keys=await self._fetch_keys_for_username(query))` etc., or wrap at the end of `search()`:
+       ```python
+       keys = await self._fetch_keys_for_username(query)  # (or _search_by_email)
+       return SearchResult(keys=keys)
+       ```
+     - Update return type of `search()` from `-> list[SourceKey]` to `-> SearchResult`.
+  3. The orchestrator's `isinstance(result, SearchResult)` / `isinstance(result, list)` branches in `_fan_out()` and `_run_resolver_query()` are now always `SearchResult` — simplify those branches to remove the `list` case.
+- **Test additions in `tests/test_source_github.py`:**
+  - Update all assertions that check `isinstance(result, list)` to check `isinstance(result, SearchResult)`.
+  - Verify `result.keys` contains the expected `SourceKey` objects.
+- **Verification:** `uv run pytest tests/test_source_github.py tests/test_source_ldap.py tests/test_orchestrator.py -v` — all pass.
+
+### Task 10.7 — Add OPTIONS preflight handler and `/healthz` endpoint (LOW-8 + recommendation)
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Files to modify:**
+  - `src/hokeypokey/hkp/routes.py`
+  - `tests/test_hkp_routes.py`
+- **Problem (LOW-8):** `Access-Control-Allow-Origin: *` is set on all responses but there is no `OPTIONS` handler. Browser preflight requests receive `405 Method Not Allowed`, preventing cross-origin JS clients from working.
+- **Problem (recommendation):** No `/healthz` endpoint for container orchestration liveness/readiness probes.
+
+**Fix — OPTIONS handler:**
+  Add a route for `OPTIONS /pks/lookup` that returns the CORS preflight response:
+  ```python
+  _CORS_PREFLIGHT_HEADERS = {
+      **_CORS_HEADERS,
+      "Access-Control-Allow-Methods": "GET, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Access-Control-Max-Age": "86400",
+  }
+
+  @hkp_bp.route("/pks/lookup", methods=["OPTIONS"])
+  async def lookup_preflight():
+      return ("", 204, _CORS_PREFLIGHT_HEADERS)
+  ```
+
+**Fix — `/healthz` endpoint:**
+  ```python
+  @hkp_bp.route("/healthz", methods=["GET"])
+  async def healthz():
+      source_count = len(_orchestrator()._sources)
+      return (
+          f"ok\nsources: {source_count}\n",
+          200,
+          {**_CORS_HEADERS, "Content-Type": _PLAIN},
+      )
+  ```
+
+- **Test additions in `tests/test_hkp_routes.py`:**
+  - `OPTIONS /pks/lookup` → 204, `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods` header present.
+  - `GET /healthz` with 2 mock sources → 200, body contains `"ok"` and `"sources: 2"`.
+  - `GET /healthz` with 0 sources → 200, body contains `"sources: 0"`.
+- **Verification:** `uv run pytest tests/test_hkp_routes.py -v` — all pass.
+
+### Task 10.8 — Run full test suite and commit
+- **Status:** `[x]` complete
+- **Agent:** `@developer`
+- **Depends on:** 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7
+- **Actions:**
+  1. Run `uv run pytest -v` — all tests must pass.
+  2. Run `uv run ruff check src/ tests/` — no lint errors.
+  3. Verify test count increased from Wave 9's ~180+ baseline.
+- **Verification:** Clean test run, clean lint, no regressions.
+
+---
+
 ## Parallelization Strategy
 
 ```
@@ -676,3 +903,30 @@ Wave 9c:       [9.7]                  ← final validation
 **Maximum parallelism:** 4 tasks in Wave 9a, 2 in Wave 9b, 1 in Wave 9c.
 
 **Critical path:** 9.1 → 9.3 → 9.7
+
+```
+Wave 10 (audit backlog):
+  [10.1] [10.2] [10.3] [10.4] [10.5] [10.6] [10.7]   ← all 7 parallel (independent files)
+                          \      |      /
+                              [10.8]                    ← depends on all of 10.1–10.7
+```
+
+**Wave 10 parallelism:** All seven remediation tasks are fully independent — they touch disjoint files:
+- 10.1 modifies `github.py` + its tests
+- 10.2 modifies `routes.py` + its tests
+- 10.3 modifies `sources/__init__.py` only
+- 10.4 modifies `orchestrator.py` + `models.py`
+- 10.5 modifies `config.py` + its tests
+- 10.6 modifies `base.py` + `github.py` + its tests — **Caution:** 10.1 and 10.6 both modify `github.py`. The changes are to different methods (`__init__` vs `search()` return type). Run 10.1 first, then incorporate into 10.6, or merge into a single pass on `github.py`.
+- 10.7 modifies `routes.py` + its tests — **Caution:** 10.2 and 10.7 both modify `routes.py` and its tests. Merge into a single pass or run sequentially.
+
+**Revised parallelization accounting for file overlaps:**
+```
+Wave 10a: [10.1+10.6] [10.2+10.7] [10.3] [10.4] [10.5]   ← 5 parallel batches
+                               \      |     /
+Wave 10b:                          [10.8]
+```
+
+**Maximum parallelism:** 5 parallel batches, then 1 final gate.
+
+**Critical path:** Any single task in Wave 10a → 10.8
