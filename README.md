@@ -63,45 +63,37 @@ When the same fingerprint appears in multiple sources, the source with the **low
 
 ## Installation
 
-### Via uv (recommended)
-
-```bash
-# Install from PyPI
-uv pip install hokeypokey
-
-# Or run directly without installing
-uvx hokeypokey --config hokeypokey.toml
-
-# Or from source
-git clone https://github.com/your-org/hokeypokey.git
-cd hokeypokey
-uv sync
-uv run hokeypokey --config hokeypokey.toml
-```
-
-### Via Docker
-
-```bash
-docker build -t hokeypokey .
-docker run -v ./hokeypokey.toml:/etc/hokeypokey/hokeypokey.toml:ro \
-           -p 11371:11371 \
-           hokeypokey
-```
-
-### Via Docker Compose
+### Via Docker Compose (recommended)
 
 ```bash
 # Copy the example config and edit it
 cp hokeypokey.example.toml hokeypokey.toml
 # edit hokeypokey.toml
 
-# Create a .env file for credentials
-cat > .env <<EOF
-LDAP_BIND_PASSWORD=your_password
-GITHUB_TOKEN=ghp_your_token
-EOF
+# Copy the credentials template and fill it in
+cp .env.example .env
+# edit .env
 
 docker compose up
+```
+
+### Via Docker
+
+```bash
+docker build -t hokeypokey .
+docker run --env-file .env \
+           -v ./hokeypokey.toml:/etc/hokeypokey/hokeypokey.toml:ro \
+           -p 11371:11371 \
+           hokeypokey
+```
+
+### From source (uv)
+
+```bash
+git clone https://github.com/your-org/hokeypokey.git
+cd hokeypokey
+uv sync
+uv run hokeypokey --config hokeypokey.toml
 ```
 
 ## Configuration
@@ -198,14 +190,14 @@ Durations are specified as strings with combinations of hours, minutes, and seco
 
 **Important:** Credentials are **never** stored in the configuration file. Hokeypokey uses `python-dotenv` to automatically load credentials from a `.env` file in the current directory.
 
-Create a `.env` file with your credentials:
+Copy `.env.example` to `.env` and fill in your credentials:
 
 ```bash
-LDAP_BIND_PASSWORD=your_password
-GITHUB_TOKEN=ghp_your_token
+cp .env.example .env
+# then edit .env
 ```
 
-Hokeypokey will automatically load this file when it starts. The `.env` file is already in `.gitignore` to prevent accidental commits.
+Hokeypokey automatically loads `.env` at startup. The file is already in `.gitignore` to prevent accidental commits.
 
 To use a custom `.env` file path, use the `--env-file` flag:
 

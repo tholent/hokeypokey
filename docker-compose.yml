@@ -9,11 +9,20 @@ services:
     volumes:
       # Mount your configuration file (read-only)
       - ./hokeypokey.toml:/etc/hokeypokey/hokeypokey.toml:ro
+    env_file:
+      - path: .env
+        required: false
     environment:
-      # Credentials are passed via environment variables, never in the config file.
-      # Set these in your shell or a .env file before running docker compose up.
+      # Credentials passed via environment variables, never in the config file.
+      # Define them in a .env file (see .env.example) or export them in your shell.
       - LDAP_BIND_PASSWORD
       - GITHUB_TOKEN
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:11371/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
     # Optional: override host/port without editing the config file
     # command: ["--config", "/etc/hokeypokey/hokeypokey.toml", "--port", "11371"]
