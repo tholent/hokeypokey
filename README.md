@@ -77,7 +77,28 @@ cp .env.example .env
 docker compose up
 ```
 
-### Via Docker
+The Compose file pulls the pre-built image from GHCR automatically. To use a specific version, set `IMAGE_TAG`:
+
+```bash
+IMAGE_TAG=1.2.3 docker compose up
+```
+
+### Via Docker (pre-built image)
+
+Pre-built multi-arch images (`linux/amd64`, `linux/arm64`) are published to GitHub Container Registry on each version tag:
+
+```bash
+docker pull ghcr.io/tholent/hokeypokey:latest
+
+docker run --env-file .env \
+           -v ./hokeypokey.toml:/etc/hokeypokey/hokeypokey.toml:ro \
+           -p 11371:11371 \
+           ghcr.io/tholent/hokeypokey:latest
+```
+
+Available tags follow semver: `latest`, `1`, `1.2`, `1.2.3`.
+
+### Via Docker (build from source)
 
 ```bash
 docker build -t hokeypokey .

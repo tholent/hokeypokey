@@ -1,5 +1,6 @@
 services:
   hokeypokey:
+    image: ghcr.io/tholent/hokeypokey:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
