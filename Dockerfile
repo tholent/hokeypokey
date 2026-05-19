@@ -11,7 +11,7 @@ WORKDIR /build
 RUN pip install --no-cache-dir uv
 
 # Copy project files
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock LICENSE ./
 COPY src/ ./src/
 
 # Install into a virtual environment under /build/.venv (non-editable so the
