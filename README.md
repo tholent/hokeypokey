@@ -1,6 +1,6 @@
 # hokeypokey
 
-[![CI](https://github.com/tholent/hokeypokey/actions/workflows/ci.yml/badge.svg)](https://github.com/tholent/hokeypokey/actions/workflows/ci.yml) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tholent_hokeypokey&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=tholent_hokeypokey) [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=tholent_hokeypokey&metric=coverage)](https://sonarcloud.io/summary/new_code?id=tholent_hokeypokey)
+[![Lint](https://github.com/tholent/hokeypokey/actions/workflows/lint.yml/badge.svg)](https://github.com/tholent/hokeypokey/actions/workflows/lint.yml) [![Type check](https://github.com/tholent/hokeypokey/actions/workflows/typecheck.yml/badge.svg)](https://github.com/tholent/hokeypokey/actions/workflows/typecheck.yml) [![Tests](https://github.com/tholent/hokeypokey/actions/workflows/test.yml/badge.svg)](https://github.com/tholent/hokeypokey/actions/workflows/test.yml) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tholent_hokeypokey&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=tholent_hokeypokey) [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=tholent_hokeypokey&metric=coverage)](https://sonarcloud.io/summary/new_code?id=tholent_hokeypokey)
 
 A read-only HKP/HKPS-compliant GPG keyserver that lazily fetches keys from pluggable upstream sources (LDAP, GitHub) and serves them to standard `gpg --keyserver` clients as a drop-in replacement.
 
