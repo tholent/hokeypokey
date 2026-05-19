@@ -14,8 +14,9 @@ RUN pip install --no-cache-dir uv
 COPY pyproject.toml uv.lock ./
 COPY src/ ./src/
 
-# Install into a virtual environment under /build/.venv
-RUN uv sync --no-dev --frozen
+# Install into a virtual environment under /build/.venv (non-editable so the
+# venv is self-contained and can be copied without the source tree).
+RUN uv sync --no-dev --frozen --no-editable
 
 # ---- Final stage ----
 FROM python:3.13-slim
@@ -31,9 +32,6 @@ WORKDIR /app
 
 # Copy the virtual environment from the builder
 COPY --from=builder /build/.venv /app/.venv
-
-# Copy the source (needed for editable installs; for non-editable this is the installed package)
-COPY --from=builder /build/src /app/src
 
 # Make the venv's binaries available
 ENV PATH="/app/.venv/bin:$PATH"
